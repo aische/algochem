@@ -10,12 +10,14 @@ export interface ControlState {
   mode: ReactionMode;
   /** Consumptive mode: refill the soup with fresh random molecules. */
   inflow: boolean;
+  /** Conserve total mass (AST nodes) via a free-mass pool. */
+  conserve: boolean;
 }
 
 export interface ControlHandlers {
   onReset(): void;
   onToggleSpecies(): void;
-  /** Mode or inflow changed (applies live). */
+  /** Mode, inflow or conservation changed (applies live). */
   onModeChange(): void;
 }
 
@@ -26,6 +28,7 @@ export class Controls {
   private pauseBtn: HTMLButtonElement;
   private seedInput: HTMLInputElement;
   private aliveEl: HTMLElement;
+  private gauge!: { root: HTMLElement; fill: HTMLElement; text: HTMLElement };
 
   constructor(parent: HTMLElement, initial: ControlState, private handlers: ControlHandlers) {
     this.state = { ...initial };
@@ -45,6 +48,15 @@ export class Controls {
         </div>
         <div class="mode-desc" data-k="desc"></div>
         <label class="check"><input data-k="inflow" type="checkbox"> inflow</label>
+      </div>
+      <div class="field">
+        <label class="check" title="Total AST nodes stay constant: shrinking reactions free mass, growing ones (and inflow) must draw on it">
+          <input data-k="conserve" type="checkbox"> conserve mass
+        </label>
+        <div class="gauge" data-k="gauge">
+          <div class="gauge-bar"><span data-k="gaugefill"></span></div>
+          <div class="gauge-text" data-k="gaugetext"></div>
+        </div>
       </div>
       <label>speed <span data-k="speedv"></span>
         <input data-k="speed" type="range" min="0" max="${SPEEDS.length - 1}" step="1">
@@ -87,6 +99,14 @@ export class Controls {
           ? "A + B → C, fresh molecules flow in"
           : "A + B → C, the soup shrinks";
     };
+    const conserve = q<HTMLInputElement>("conserve");
+    conserve.checked = this.state.conserve;
+    this.gauge = { root: q("gauge"), fill: q("gaugefill"), text: q("gaugetext") };
+    conserve.addEventListener("change", () => {
+      this.state.conserve = conserve.checked;
+      conserve.blur(); // keep Space for pause
+      this.handlers.onModeChange();
+    });
     for (const b of modeBtns) {
       b.addEventListener("click", () => {
         this.state.mode = b.dataset.mode as ReactionMode;
@@ -152,8 +172,16 @@ export class Controls {
     });
   }
 
-  setAlive(n: number): void {
-    this.aliveEl.textContent = String(n);
+  /** Live readouts: molecule count and the mass gauge. */
+  setStats(alive: number, pool: number, soupMass: number): void {
+    this.aliveEl.textContent = String(alive);
+    const g = this.gauge;
+    g.root.classList.toggle("off", !this.state.conserve);
+    const total = pool + soupMass;
+    g.fill.style.width = `${total > 0 ? (100 * pool) / total : 0}%`;
+    g.text.textContent = this.state.conserve
+      ? `${fmt(pool)} free · ${fmt(total)} total`
+      : `off · ${fmt(soupMass)} in soup`;
   }
 
   togglePause(): void {
@@ -167,6 +195,8 @@ export class Controls {
     this.handlers.onReset();
   }
 }
+
+const fmt = (n: number) => Math.round(n).toLocaleString("en-US");
 
 export function randomSeed(): string {
   return Math.random().toString(36).slice(2, 8);

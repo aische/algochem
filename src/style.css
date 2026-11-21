@@ -384,3 +384,37 @@ body.drawer-open .panel {
   color: var(--fg);
   font-variant-numeric: tabular-nums;
 }
+
+/* --- Mass gauge ---------------------------------------------------------- */
+
+.panel .gauge {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  transition: opacity 0.2s;
+}
+
+.panel .gauge.off {
+  opacity: 0.4;
+}
+
+.panel .gauge-bar {
+  height: 4px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.08);
+  overflow: hidden;
+}
+
+.panel .gauge-bar span {
+  display: block;
+  height: 100%;
+  width: 0;
+  background: var(--accent);
+  transition: width 0.25s ease;
+}
+
+.panel .gauge-text {
+  color: var(--dim);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}

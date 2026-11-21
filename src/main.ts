@@ -35,6 +35,7 @@ const controls = new Controls(
     population: clamp(Number(params.get("n")) || 600, 300, 1000),
     mode: params.get("mode") === "consumptive" ? "consumptive" : "catalytic",
     inflow: params.get("inflow") !== "0",
+    conserve: params.get("conserve") === "1",
   },
   { onReset: reset, onToggleSpecies: () => drawer.toggle(), onModeChange: applyMode },
 );
@@ -55,9 +56,10 @@ function reset(): void {
 
 /** Push mode/inflow into the world and the URL (applies live, no reset). */
 function applyMode(): void {
-  const { seed, mode, inflow } = controls.state;
+  const { seed, mode, inflow, conserve } = controls.state;
   world.mode = mode;
   world.inflow = inflow;
+  world.conserve = conserve;
   const url = new URL(location.href);
   url.searchParams.set("seed", seed);
   if (mode === "consumptive") {
@@ -68,6 +70,8 @@ function applyMode(): void {
     url.searchParams.delete("mode");
     url.searchParams.delete("inflow");
   }
+  if (conserve) url.searchParams.set("conserve", "1");
+  else url.searchParams.delete("conserve");
   history.replaceState(null, "", url);
 }
 
@@ -180,7 +184,7 @@ function frame(now: number): void {
   updateTooltip(hovered);
   drawer.tick(now);
   if (now - lastAliveUpdate > 250) {
-    controls.setAlive(world.aliveCount());
+    controls.setStats(world.aliveCount(), world.pool, world.soupMass());
     lastAliveUpdate = now;
   }
   if (perf) perf.sample(tSim - tStart, performance.now() - tSim);
@@ -204,7 +208,8 @@ const perf = params.has("perf")
             `[perf] sim ${(this.sim / this.n).toFixed(2)} ms, draw ${(this.draw / this.n).toFixed(2)} ms, ` +
               `${(this.n / 3).toFixed(0)} fps, ` +
               `${world.aliveCount()} molecules, ${species} species, zoom ${zoom.toFixed(2)}, ` +
-              `coverage ${world.coverage().toFixed(2)}, ${JSON.stringify(reactor.stats)}`,
+              `coverage ${world.coverage().toFixed(2)}, pool ${world.pool}, soup mass ${world.soupMass()}, ` +
+              `starved ${world.starved}, ${JSON.stringify(reactor.stats)}`,
           );
           this.sim = this.draw = this.n = 0;
           this.t0 = performance.now();

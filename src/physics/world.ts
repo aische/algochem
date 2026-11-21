@@ -50,6 +50,8 @@ export interface WorldConfig {
   mergeTime: number;
   /** Max fresh molecules added per step while inflow refills the soup. */
   inflowPerStep: number;
+  /** Free mass at start, as a fraction of the initial soup's mass. */
+  initialPoolFraction: number;
   /** Broad-phase grid cell size (px). Wide, short cells suit text labels. */
   cellW: number;
   cellH: number;
@@ -65,6 +67,7 @@ export const DEFAULT_WORLD: WorldConfig = {
   dilutionRadius: 120,
   mergeTime: 0.35,
   inflowPerStep: 2,
+  initialPoolFraction: 0.2,
   cellW: 128,
   cellH: 32,
 };
@@ -102,6 +105,16 @@ export class World {
   inflow = true;
   /** Population inflow refills to (the initial size). */
   target = 0;
+  /**
+   * Conserve mass (AST node count). Soup mass + `pool` stays constant:
+   * reactions that shrink terms free nodes into the pool, reactions that grow
+   * them must draw from it (or fail), and inflow is built from it.
+   */
+  conserve = false;
+  /** Free mass (nodes) not bound in any molecule. */
+  pool = 0;
+  /** Reactions refused because the pool could not pay for them. */
+  starved = 0;
   /** Sim time at which each live species (term id) first appeared. */
   private firstSeen = new Map<number, number>();
   stir: Stir | null = null;
@@ -125,6 +138,8 @@ export class World {
 
   populate(terms: Term[]): void {
     this.target = terms.length;
+    const mass = terms.reduce((m, t) => m + t.size, 0);
+    this.pool = Math.round(mass * this.cfg.initialPoolFraction);
     this.particles = terms.map((term) => {
       const p = this.spawnRandomly(term);
       p.age = 10; // initial molecules appear without fading in
@@ -171,6 +186,13 @@ export class World {
     }
     for (const id of this.firstSeen.keys()) if (!byId.has(id)) this.firstSeen.delete(id);
     return [...byId.values()];
+  }
+
+  /** Mass (total AST nodes) bound in live molecules. */
+  soupMass(): number {
+    let m = 0;
+    for (const p of this.particles) if (p.dying < 0) m += p.term.size;
+    return m;
   }
 
   aliveCount(): number {
@@ -230,7 +252,15 @@ export class World {
     const missing = Math.min(this.target - this.aliveCount(), this.cfg.inflowPerStep);
     const { initMinSize, initMaxSize } = this.reactor.cfg;
     for (let i = 0; i < missing; i++) {
-      this.particles.push(this.spawnRandomly(randomClosedTerm(this.rng, initMinSize, initMaxSize)));
+      let maxSize = initMaxSize;
+      if (this.conserve) {
+        // Fresh molecules are built from free mass, so they must fit the pool.
+        maxSize = Math.min(maxSize, Math.floor(this.pool));
+        if (maxSize < initMinSize) break;
+      }
+      const term = randomClosedTerm(this.rng, initMinSize, maxSize);
+      if (this.conserve) this.pool -= term.size;
+      this.particles.push(this.spawnRandomly(term));
     }
   }
 
@@ -355,10 +385,7 @@ export class World {
       }
     }
 
-    for (const p of products) {
-      ps.push(p);
-      if (this.mode === "catalytic") this.dilute(p);
-    }
+    for (const p of products) ps.push(p);
   }
 
   private separate(a: Particle, b: Particle, dx: number, dy: number, ox: number, oy: number): void {
@@ -402,13 +429,35 @@ export class World {
     if (!product) return null;
     const mx = a.x + dx / 2;
     const my = a.y + dy / 2;
+    const px = mod(mx, this.width);
+    const py = mod(my, this.height);
+
+    // Mass bookkeeping. Catalytic: the product is new mass and the diluted
+    // molecule's mass is freed. Consumptive: the reactants turn into the product.
+    let victim: Particle | null = null;
+    let cost: number;
+    if (consumptive) {
+      cost = product.size - a.term.size - b.term.size;
+    } else {
+      victim = this.pickNear(px, py);
+      cost = product.size - (victim ? victim.term.size : 0);
+    }
+    if (this.conserve) {
+      if (cost > this.pool) {
+        this.starved++;
+        return null; // not enough free mass: elastic
+      }
+      this.pool -= cost;
+    }
+    if (victim) victim.dying = 0;
+
     if (consumptive) {
       // Both reactants are used up and drift into the collision point.
       a.dying = b.dying = 0;
       a.merge = { x: mx, y: my };
       b.merge = { x: b.x - dx / 2, y: b.y - dy / 2 };
     }
-    const p = this.spawn(product, mod(mx, this.width), mod(my, this.height));
+    const p = this.spawn(product, px, py);
     p.product = true;
     const jitter = this.cfg.brownian;
     p.vx = (a.vx + b.vx) / 2 + this.rng.gauss() * jitter;
@@ -418,11 +467,12 @@ export class World {
   }
 
   /**
-   * Remove one random live molecule near `keep` (other than `keep`) to hold N
-   * constant. Removing locally keeps density uniform; global removal lets
-   * reaction hot spots pile up, since products appear where reactions happen.
+   * Random live molecule near (x, y): the one a catalytic product displaces
+   * to hold N constant. Removing locally keeps density uniform; global
+   * removal lets reaction hot spots pile up, since products appear where
+   * reactions happen.
    */
-  private dilute(keep: Particle): void {
+  private pickNear(x: number, y: number): Particle | null {
     const ps = this.particles;
     const r = this.cfg.dilutionRadius;
     const W = this.width;
@@ -430,9 +480,9 @@ export class World {
     let victim: Particle | null = null;
     let seen = 0;
     for (const q of ps) {
-      if (q === keep || q.dying >= 0) continue;
-      let dx = Math.abs(q.x - keep.x);
-      let dy = Math.abs(q.y - keep.y);
+      if (q.dying >= 0) continue;
+      let dx = Math.abs(q.x - x);
+      let dy = Math.abs(q.y - y);
       dx = Math.min(dx, W - dx);
       dy = Math.min(dy, H - dy);
       if (dx * dx + dy * dy > r * r) continue;
@@ -441,9 +491,9 @@ export class World {
     }
     for (let tries = 0; !victim && tries < 32; tries++) {
       const q = ps[this.rng.int(0, ps.length - 1)];
-      if (q !== keep && q.dying < 0) victim = q;
+      if (q.dying < 0) victim = q;
     }
-    if (victim) victim.dying = 0;
+    return victim;
   }
 
   private reap(dt: number): void {
