@@ -18,6 +18,8 @@ Normalization uses normal-order reduction, with limits on the number of steps an
 
 Expressions use canonical variable names, so equivalent terms always look the same, e.g. `λxyz.x z (y z)`.
 
+The starting soup, inflow and random drops use random expressions of 3–12 nodes, already reduced to normal form.
+
 ## Modes
 
 ### Reaction

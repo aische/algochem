@@ -11,7 +11,7 @@ import { FamilyColors } from "./render/familyColors";
 import { familySummary } from "./chem/family";
 import { print } from "./lambda/print";
 import { parse } from "./lambda/parse";
-import { randomClosedTerm } from "./lambda/random";
+import { randomNormalTerm } from "./lambda/random";
 
 const DT = 1 / 60; // fixed simulation step (s)
 const MAX_STEPS_PER_FRAME = 16;
@@ -206,7 +206,7 @@ function dropAt(x: number, y: number): void {
   // Parsed here, not stored: terms kept outside the soup would go stale
   // when the intern table is garbage-collected.
   const terms = Array.from({ length: DROP_COUNT }, () =>
-    src ? parse(src) : randomClosedTerm(dropRng, initMinSize, initMaxSize),
+    src ? parse(src) : randomNormalTerm(dropRng, initMinSize, initMaxSize, reactor.cfg.limits),
   );
   world.drop(terms, x, y);
   renderer.flash(x, y, performance.now());

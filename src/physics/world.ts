@@ -1,6 +1,6 @@
 import type { Term } from "../lambda/term";
 import type { Reactor } from "../chem/soup";
-import { randomClosedTerm } from "../lambda/random";
+import { randomNormalTerm } from "../lambda/random";
 import type { Rng } from "../rng";
 
 /**
@@ -371,7 +371,7 @@ export class World {
       if (byMass) maxSize = Math.min(maxSize, deficit);
       if (this.conserve) maxSize = Math.min(maxSize, Math.floor(this.pool));
       if (maxSize < initMinSize) break;
-      const term = randomClosedTerm(this.rng, initMinSize, maxSize);
+      const term = randomNormalTerm(this.rng, initMinSize, maxSize, this.reactor.cfg.limits);
       if (this.conserve) this.pool -= term.size;
       deficit -= term.size;
       alive++;

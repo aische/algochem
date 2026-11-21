@@ -3,7 +3,7 @@ import { parse } from "../src/lambda/parse";
 import { print } from "../src/lambda/print";
 import { normalize } from "../src/lambda/reduce";
 import { mkApp, isClosed } from "../src/lambda/term";
-import { randomClosedTerm } from "../src/lambda/random";
+import { randomClosedTerm, randomNormalTerm } from "../src/lambda/random";
 import { Rng } from "../src/rng";
 
 const nf = (src: string) => {
@@ -111,5 +111,33 @@ describe("randomClosedTerm", () => {
     for (let i = 0; i < 100; i++) {
       expect(randomClosedTerm(a, 3, 12)).toBe(randomClosedTerm(b, 3, 12));
     }
+  });
+});
+
+describe("randomNormalTerm", () => {
+  it("produces closed normal forms within the size bounds", () => {
+    const rng = new Rng(42);
+    const sizes = new Set<number>();
+    for (let i = 0; i < 2000; i++) {
+      const t = randomNormalTerm(rng, 3, 12);
+      expect(isClosed(t)).toBe(true);
+      expect(t.size).toBeGreaterThanOrEqual(3);
+      expect(t.size).toBeLessThanOrEqual(12);
+      const r = normalize(t);
+      expect(r.ok && r.steps).toBe(0); // already in normal form
+      sizes.add(t.size);
+    }
+    expect(sizes.size).toBe(10); // every size in 3..12 occurs
+  });
+
+  it("respects a tight size range", () => {
+    const rng = new Rng(1);
+    for (let i = 0; i < 200; i++) expect(randomNormalTerm(rng, 3, 3).size).toBe(3);
+  });
+
+  it("is deterministic for a seed", () => {
+    const a = new Rng("seed");
+    const b = new Rng("seed");
+    for (let i = 0; i < 100; i++) expect(randomNormalTerm(a, 3, 12)).toBe(randomNormalTerm(b, 3, 12));
   });
 });

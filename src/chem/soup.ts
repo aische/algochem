@@ -1,6 +1,6 @@
 import { type Term, mkApp, collectGarbage, internTableSize, leadingBinders } from "../lambda/term";
 import { normalize, type ReduceLimits, DEFAULT_LIMITS } from "../lambda/reduce";
-import { randomClosedTerm } from "../lambda/random";
+import { randomNormalTerm } from "../lambda/random";
 import type { Rng } from "../rng";
 
 export interface ChemConfig {
@@ -97,7 +97,7 @@ export class Reactor {
 
 export function randomSoup(rng: Rng, n: number, cfg: ChemConfig = DEFAULT_CHEM): Term[] {
   const out: Term[] = [];
-  for (let i = 0; i < n; i++) out.push(randomClosedTerm(rng, cfg.initMinSize, cfg.initMaxSize));
+  for (let i = 0; i < n; i++) out.push(randomNormalTerm(rng, cfg.initMinSize, cfg.initMaxSize, cfg.limits));
   return out;
 }
 
