@@ -418,3 +418,23 @@ body.drawer-open .panel {
   font-size: 10px;
   font-variant-numeric: tabular-nums;
 }
+
+.panel .inflow-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.panel .seg.mini button {
+  padding: 2px 8px;
+  font-size: 10px;
+}
+
+.panel .seg.disabled {
+  opacity: 0.4;
+}
+
+.panel .seg button:disabled {
+  cursor: default;
+}

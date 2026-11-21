@@ -35,6 +35,7 @@ const controls = new Controls(
     population: clamp(Number(params.get("n")) || 600, 300, 1000),
     mode: params.get("mode") === "consumptive" ? "consumptive" : "catalytic",
     inflow: params.get("inflow") !== "0",
+    refillBy: params.get("refill") === "mass" ? "mass" : "count",
     conserve: params.get("conserve") === "1",
   },
   { onReset: reset, onToggleSpecies: () => drawer.toggle(), onModeChange: applyMode },
@@ -56,19 +57,20 @@ function reset(): void {
 
 /** Push mode/inflow into the world and the URL (applies live, no reset). */
 function applyMode(): void {
-  const { seed, mode, inflow, conserve } = controls.state;
+  const { seed, mode, inflow, refillBy, conserve } = controls.state;
   world.mode = mode;
   world.inflow = inflow;
+  world.refillBy = refillBy;
   world.conserve = conserve;
   const url = new URL(location.href);
   url.searchParams.set("seed", seed);
+  url.searchParams.delete("mode");
+  url.searchParams.delete("inflow");
+  url.searchParams.delete("refill");
   if (mode === "consumptive") {
     url.searchParams.set("mode", mode);
-    if (inflow) url.searchParams.delete("inflow");
-    else url.searchParams.set("inflow", "0");
-  } else {
-    url.searchParams.delete("mode");
-    url.searchParams.delete("inflow");
+    if (!inflow) url.searchParams.set("inflow", "0");
+    else if (refillBy === "mass") url.searchParams.set("refill", "mass");
   }
   if (conserve) url.searchParams.set("conserve", "1");
   else url.searchParams.delete("conserve");

@@ -129,3 +129,37 @@ describe("World mass conservation", () => {
     expect(w.pool).toBe(pool);
   });
 });
+
+describe("Inflow refill by mass", () => {
+  it("restores the initial soup mass while the count floats", () => {
+    const w = makeWorld("consumptive", true);
+    w.refillBy = "mass";
+    const startMass = w.soupMass();
+    const counts = new Set<number>();
+    const events: ReactionEvent[] = [];
+    for (let i = 0; i < 1500; i++) {
+      w.step(1 / 60, events);
+      counts.add(w.aliveCount());
+    }
+    expect(events.length).toBeGreaterThan(50);
+    // Within one fresh molecule (max 12 nodes) plus what was consumed this step.
+    expect(Math.abs(w.soupMass() - startMass)).toBeLessThan(60);
+    expect(w.aliveCount()).not.toBe(300); // count is no longer what's held fixed
+    expect(counts.size).toBeGreaterThan(5);
+    expect(w.aliveCount()).toBeLessThanOrEqual(600); // capped at 2× initial
+  });
+
+  it("still conserves total mass when conservation is on", () => {
+    const w = makeWorld("consumptive", true);
+    w.refillBy = "mass";
+    w.conserve = true;
+    const start = w.soupMass() + w.pool;
+    const events: ReactionEvent[] = [];
+    for (let i = 0; i < 1500; i++) {
+      w.step(1 / 60, events);
+      expect(w.soupMass() + w.pool).toBe(start);
+    }
+    // Inflow turns spare free mass back into molecules: pool settles near its start.
+    expect(w.pool).toBeLessThan(start * 0.3);
+  });
+});

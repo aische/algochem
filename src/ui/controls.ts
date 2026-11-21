@@ -1,4 +1,4 @@
-import type { ReactionMode } from "../physics/world";
+import type { ReactionMode, RefillBy } from "../physics/world";
 
 export const SPEEDS = [0.25, 0.5, 1, 2, 4, 8];
 
@@ -10,6 +10,8 @@ export interface ControlState {
   mode: ReactionMode;
   /** Consumptive mode: refill the soup with fresh random molecules. */
   inflow: boolean;
+  /** What inflow restores: the initial molecule count or the initial mass. */
+  refillBy: RefillBy;
   /** Conserve total mass (AST nodes) via a free-mass pool. */
   conserve: boolean;
 }
@@ -47,7 +49,13 @@ export class Controls {
           <button data-mode="consumptive" title="Reactants are used up">Consumptive</button>
         </div>
         <div class="mode-desc" data-k="desc"></div>
-        <label class="check"><input data-k="inflow" type="checkbox"> inflow</label>
+        <div class="inflow-row">
+          <label class="check"><input data-k="inflow" type="checkbox"> inflow</label>
+          <div class="seg mini" data-k="refill" title="What inflow restores">
+            <button data-refill="count" title="Refill to the initial molecule count">count</button>
+            <button data-refill="mass" title="Refill to the initial soup mass; the count floats">mass</button>
+          </div>
+        </div>
       </div>
       <div class="field">
         <label class="check" title="Total AST nodes stay constant: shrinking reactions free mass, growing ones (and inflow) must draw on it">
@@ -87,18 +95,35 @@ export class Controls {
     const modeBtns = this.root.querySelectorAll<HTMLButtonElement>("[data-mode]");
     const inflow = q<HTMLInputElement>("inflow");
     const desc = q("desc");
+    const refill = q("refill");
+    const refillBtns = refill.querySelectorAll<HTMLButtonElement>("[data-refill]");
     const syncMode = () => {
       const consumptive = this.state.mode === "consumptive";
       for (const b of modeBtns) b.classList.toggle("on", b.dataset.mode === this.state.mode);
       inflow.checked = this.state.inflow;
       inflow.disabled = !consumptive;
       inflow.parentElement!.classList.toggle("disabled", !consumptive);
+      const refillActive = consumptive && this.state.inflow;
+      refill.classList.toggle("disabled", !refillActive);
+      for (const b of refillBtns) {
+        b.disabled = !refillActive;
+        b.classList.toggle("on", b.dataset.refill === this.state.refillBy);
+      }
       desc.textContent = !consumptive
         ? "A + B → A + B + C, one nearby molecule removed"
-        : this.state.inflow
-          ? "A + B → C, fresh molecules flow in"
-          : "A + B → C, the soup shrinks";
+        : !this.state.inflow
+          ? "A + B → C, the soup shrinks"
+          : this.state.refillBy === "mass"
+            ? "A + B → C, inflow restores the mass"
+            : "A + B → C, inflow restores the count";
     };
+    for (const b of refillBtns) {
+      b.addEventListener("click", () => {
+        this.state.refillBy = b.dataset.refill as RefillBy;
+        syncMode();
+        this.handlers.onModeChange();
+      });
+    }
     const conserve = q<HTMLInputElement>("conserve");
     conserve.checked = this.state.conserve;
     this.gauge = { root: q("gauge"), fill: q("gaugefill"), text: q("gaugetext") };

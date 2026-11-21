@@ -11,6 +11,9 @@ import type { Rng } from "../rng";
  */
 export type ReactionMode = "catalytic" | "consumptive";
 
+/** What inflow restores: the initial molecule count, or the initial soup mass. */
+export type RefillBy = "count" | "mass";
+
 export interface Particle {
   term: Term;
   x: number;
@@ -52,6 +55,8 @@ export interface WorldConfig {
   inflowPerStep: number;
   /** Free mass at start, as a fraction of the initial soup's mass. */
   initialPoolFraction: number;
+  /** Refilling by mass: molecule count is capped at this × the initial count. */
+  maxPopulationFactor: number;
   /** Broad-phase grid cell size (px). Wide, short cells suit text labels. */
   cellW: number;
   cellH: number;
@@ -66,8 +71,9 @@ export const DEFAULT_WORLD: WorldConfig = {
   dissolveTime: 0.25,
   dilutionRadius: 120,
   mergeTime: 0.35,
-  inflowPerStep: 2,
+  inflowPerStep: 6,
   initialPoolFraction: 0.2,
+  maxPopulationFactor: 2,
   cellW: 128,
   cellH: 32,
 };
@@ -105,6 +111,9 @@ export class World {
   inflow = true;
   /** Population inflow refills to (the initial size). */
   target = 0;
+  refillBy: RefillBy = "count";
+  /** Soup mass inflow refills to when refilling by mass (the initial mass). */
+  targetMass = 0;
   /**
    * Conserve mass (AST node count). Soup mass + `pool` stays constant:
    * reactions that shrink terms free nodes into the pool, reactions that grow
@@ -139,6 +148,7 @@ export class World {
   populate(terms: Term[]): void {
     this.target = terms.length;
     const mass = terms.reduce((m, t) => m + t.size, 0);
+    this.targetMass = mass;
     this.pool = Math.round(mass * this.cfg.initialPoolFraction);
     this.particles = terms.map((term) => {
       const p = this.spawnRandomly(term);
@@ -247,19 +257,28 @@ export class World {
     return p;
   }
 
-  /** Top the soup back up towards `target` with fresh random molecules. */
+  /**
+   * Top the soup back up with fresh random molecules: towards the initial
+   * count, or towards the initial mass (the count then floats, capped at
+   * `maxPopulationFactor` × the initial count). With conservation on, every
+   * new molecule is paid for from the pool.
+   */
   private flowIn(): void {
-    const missing = Math.min(this.target - this.aliveCount(), this.cfg.inflowPerStep);
     const { initMinSize, initMaxSize } = this.reactor.cfg;
-    for (let i = 0; i < missing; i++) {
+    const byMass = this.refillBy === "mass";
+    let alive = this.aliveCount();
+    let deficit = byMass ? this.targetMass - this.soupMass() : 0;
+    const cap = byMass ? Math.floor(this.target * this.cfg.maxPopulationFactor) : this.target;
+    for (let i = 0; i < this.cfg.inflowPerStep && alive < cap; i++) {
       let maxSize = initMaxSize;
-      if (this.conserve) {
-        // Fresh molecules are built from free mass, so they must fit the pool.
-        maxSize = Math.min(maxSize, Math.floor(this.pool));
-        if (maxSize < initMinSize) break;
-      }
+      // Don't overshoot the mass target, and only build what the pool can pay for.
+      if (byMass) maxSize = Math.min(maxSize, deficit);
+      if (this.conserve) maxSize = Math.min(maxSize, Math.floor(this.pool));
+      if (maxSize < initMinSize) break;
       const term = randomClosedTerm(this.rng, initMinSize, maxSize);
       if (this.conserve) this.pool -= term.size;
+      deficit -= term.size;
+      alive++;
       this.particles.push(this.spawnRandomly(term));
     }
   }
