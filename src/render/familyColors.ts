@@ -1,6 +1,7 @@
 import type { Term } from "../lambda/term";
 import { familyKey, type FamilyInfo } from "../chem/family";
-import { FAMILY_COLORS, OTHER, PLAIN } from "./renderer";
+import { OTHER, PLAIN } from "./renderer";
+import { theme } from "./theme";
 
 /** A family needs at least this many molecules to get a color. */
 const MIN_COUNT = 3;
@@ -19,7 +20,7 @@ export class FamilyColors {
     const top = families
       .filter((f) => f.count >= MIN_COUNT)
       .sort((a, b) => b.count - a.count || (a.key < b.key ? -1 : 1))
-      .slice(0, FAMILY_COLORS.length)
+      .slice(0, OTHER)
       .map((f) => f.key);
     const keep = new Set(top);
     for (const key of this.slots.keys()) if (!keep.has(key)) this.slots.delete(key);
@@ -47,6 +48,6 @@ export class FamilyColors {
   colorOf(key: string): string | null {
     if (!this.enabled) return null;
     const slot = this.slots.get(key);
-    return slot === undefined ? null : FAMILY_COLORS[slot];
+    return slot === undefined ? null : theme.families[slot];
   }
 }

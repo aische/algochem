@@ -1,14 +1,13 @@
 import type { Term } from "../lambda/term";
 import { print, printCompact, truncate } from "../lambda/print";
 import type { World, Particle } from "../physics/world";
+import { theme } from "./theme";
 
 const FONT_SIZE = 11;
 const FONT = `${FONT_SIZE}px "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace`;
 const PAD_X = 3;
 const PAD_Y = 2;
 const MAX_CHARS = 30;
-const TEXT_COLOR = "rgba(214, 222, 235, 0.86)";
-const BG = "#06080d";
 const GLOW_TIME = 1.2; // seconds a new product glows
 const FADE_IN = 0.35;
 const FLASH_MS = 450;
@@ -16,16 +15,11 @@ const SPRITE_CACHE_MAX = 4000;
 const DIM_ALPHA = 0.2; // other species while one is highlighted
 
 /**
- * Label colors for "color by family": the top families in the soup get these
- * hues in order, the rest are drawn in OTHER_COLOR. Checked all-pairs against
- * the background for normal vision and color blindness; the label text itself
- * identifies each molecule, so color is never the only cue.
+ * Color slot of a molecule: -1 plain text, 0..4 a family hue (theme.families),
+ * 5 another family (theme.other).
  */
-export const FAMILY_COLORS = ["#5aa9ff", "#ff8a3d", "#3fd0a0", "#ffd84a", "#e07ad8"];
-export const OTHER_COLOR = "rgba(214, 222, 235, 0.42)";
-/** Color slot of a molecule: -1 plain text, 0..4 a family hue, 5 another family. */
 export const PLAIN = -1;
-export const OTHER = FAMILY_COLORS.length;
+export const OTHER = 5;
 
 /** Which molecules to light up (the rest are dimmed). */
 export type Highlight = (t: Term) => boolean;
@@ -52,8 +46,8 @@ export class Renderer {
   /** Color slot per molecule (see PLAIN / OTHER / FAMILY_COLORS). */
   colorSlot: (t: Term) => number = () => PLAIN;
   private measureCtx: CanvasRenderingContext2D;
-  private flashSprite: HTMLCanvasElement;
-  private haloSprite: HTMLCanvasElement;
+  private flashSprite!: HTMLCanvasElement;
+  private haloSprite!: HTMLCanvasElement;
   private flashes: Flash[] = [];
   private frame = 0;
   width = 0;
@@ -63,9 +57,15 @@ export class Renderer {
     this.ctx = canvas.getContext("2d")!;
     this.measureCtx = document.createElement("canvas").getContext("2d")!;
     this.measureCtx.font = FONT;
-    this.flashSprite = makeFlashSprite();
-    this.haloSprite = makeHaloSprite();
+    this.applyTheme();
     this.resize();
+  }
+
+  /** Rebuild the cached sprites after the theme changed. */
+  applyTheme(): void {
+    this.flashSprite = makeGlowSprite(128, theme.flash);
+    this.haloSprite = makeGlowSprite(64, theme.halo);
+    this.sprites.clear();
   }
 
   resize(): void {
@@ -101,12 +101,12 @@ export class Renderer {
     ctx.setTransform(dpr * zoom, 0, 0, dpr * zoom, 0, 0);
     ctx.globalCompositeOperation = "source-over";
     ctx.globalAlpha = 1;
-    ctx.fillStyle = BG;
+    ctx.fillStyle = theme.bg;
     ctx.fillRect(0, 0, W, H);
 
     if (world.wall) {
       // The middle wall, and the one at the x = 0 seam (screen edges).
-      ctx.strokeStyle = "rgba(120, 220, 255, 0.28)";
+      ctx.strokeStyle = theme.wall;
       ctx.lineWidth = 1.5 / zoom;
       ctx.setLineDash([6 / zoom, 6 / zoom]);
       ctx.beginPath();
@@ -118,8 +118,8 @@ export class Renderer {
       ctx.setLineDash([]);
     }
 
-    // Halos behind freshly made products (additive, stretched to the label).
-    ctx.globalCompositeOperation = "lighter";
+    // Halos behind freshly made products (stretched to the label).
+    ctx.globalCompositeOperation = theme.glow;
     for (const p of world.particles) {
       if (highlight !== null && p.dying < 0 && highlight(p.term)) {
         ctx.globalAlpha = 0.5;
@@ -152,13 +152,13 @@ export class Renderer {
 
     if (hovered) {
       ctx.globalAlpha = 0.9;
-      ctx.strokeStyle = "rgba(120, 220, 255, 0.7)";
+      ctx.strokeStyle = theme.hover;
       ctx.lineWidth = 1;
       ctx.strokeRect(hovered.x - hovered.w / 2, hovered.y - hovered.h / 2, hovered.w, hovered.h);
     }
 
-    // Reaction flashes, additive.
-    ctx.globalCompositeOperation = "lighter";
+    // Reaction flashes.
+    ctx.globalCompositeOperation = theme.glow;
     const live: Flash[] = [];
     for (const f of this.flashes) {
       const t = (now - f.t0) / FLASH_MS;
@@ -208,7 +208,7 @@ export class Renderer {
       c.scale(this.dpr, this.dpr);
       c.font = FONT;
       c.textBaseline = "middle";
-      c.fillStyle = slot === PLAIN ? TEXT_COLOR : slot === OTHER ? OTHER_COLOR : FAMILY_COLORS[slot];
+      c.fillStyle = slot === PLAIN ? theme.text : slot === OTHER ? theme.other : theme.families[slot];
       c.fillText(text, PAD_X, h / 2 + 0.5);
       s = { canvas, w, h, lastUsed: this.frame };
       this.sprites.set(key, s);
@@ -224,31 +224,13 @@ export class Renderer {
   }
 }
 
-function makeFlashSprite(): HTMLCanvasElement {
-  const size = 128;
+/** Radial glow: the reaction flash, or the halo stretched behind a new molecule. */
+function makeGlowSprite(size: number, stops: readonly [number, string][]): HTMLCanvasElement {
   const c = document.createElement("canvas");
   c.width = c.height = size;
   const g = c.getContext("2d")!;
   const grad = g.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
-  grad.addColorStop(0, "rgba(255, 255, 240, 1)");
-  grad.addColorStop(0.15, "rgba(255, 220, 140, 0.85)");
-  grad.addColorStop(0.45, "rgba(255, 140, 60, 0.25)");
-  grad.addColorStop(1, "rgba(255, 80, 40, 0)");
-  g.fillStyle = grad;
-  g.fillRect(0, 0, size, size);
-  return c;
-}
-
-/** Soft cyan glow; drawn stretched behind a newly formed molecule. */
-function makeHaloSprite(): HTMLCanvasElement {
-  const size = 64;
-  const c = document.createElement("canvas");
-  c.width = c.height = size;
-  const g = c.getContext("2d")!;
-  const grad = g.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
-  grad.addColorStop(0, "rgba(120, 220, 255, 0.9)");
-  grad.addColorStop(0.5, "rgba(80, 180, 255, 0.35)");
-  grad.addColorStop(1, "rgba(60, 140, 255, 0)");
+  for (const [at, color] of stops) grad.addColorStop(at, color);
   g.fillStyle = grad;
   g.fillRect(0, 0, size, size);
   return c;

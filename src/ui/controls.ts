@@ -1,6 +1,6 @@
 import type { ReactionMode, RefillBy } from "../physics/world";
 import { parse } from "../lambda/parse";
-import { drawSparkline, FAMILIES_COLOR, SPECIES_COLOR, type Sample } from "./sparkline";
+import { drawSparkline, familiesColor, speciesColor, type Sample } from "./sparkline";
 
 export const SPEEDS = [0.25, 0.5, 1, 2, 4, 8];
 export const MIXES = [0.25, 0.5, 1, 2, 4, 8];
@@ -38,6 +38,7 @@ export interface ControlHandlers {
   onReset(): void;
   onToggleSpecies(): void;
   onToggleHelp(): void;
+  onToggleTheme(): void;
   /** Mode, inflow, conservation, binder limit or mixing changed (applies live). */
   onModeChange(): void;
   /** Label style or coloring changed. */
@@ -58,16 +59,23 @@ export class Controls {
   private samples: Sample[] = [];
   private sparkHover: number | null = null;
   private wallBtn: HTMLButtonElement;
+  /** Shown in the corner while the panel is hidden, to bring it back. */
+  private showBtn: HTMLButtonElement;
 
   constructor(parent: HTMLElement, initial: ControlState, private handlers: ControlHandlers) {
     this.state = { ...initial };
     this.root = document.createElement("div");
     this.root.className = "panel";
     this.root.innerHTML = `
+      <div class="panel-head">
+        <span class="title">algochem</span>
+        <button data-k="theme" class="icon" title="Light / dark (T)">◐</button>
+        <button data-k="help" class="icon" title="Help (?)">?</button>
+        <button data-k="hide" class="icon" title="Hide the panel (H)">⇥</button>
+      </div>
       <div class="row">
         <button data-k="pause" title="Space">Pause</button>
         <button data-k="reset" title="R">Reset</button>
-        <button data-k="help" class="help-btn" title="Help (?)">?</button>
       </div>
       <button data-k="species" title="L">Species list</button>
       <div class="field diversity">
@@ -142,9 +150,19 @@ export class Controls {
         <input data-k="drop" type="text" spellcheck="false" placeholder="random molecules">
       </label>
       <div class="alive"><span data-k="alive">0</span> molecules now</div>
-      <div class="hint">drag to stir · shift-click drop · space pause · R reset · L species · H hide · ? help</div>
+      <div class="hint">drag to stir · shift-click drop · space pause · R reset · L species · T theme · H hide · ? help</div>
     `;
     parent.appendChild(this.root);
+    this.showBtn = document.createElement("button");
+    this.showBtn.className = "panel-show";
+    this.showBtn.title = "Show the panel (H)";
+    this.showBtn.textContent = "⇤ controls";
+    this.showBtn.hidden = true;
+    this.showBtn.addEventListener("click", () => {
+      this.togglePanel(true);
+      this.showBtn.blur();
+    });
+    parent.appendChild(this.showBtn);
 
     const q = <T extends HTMLElement>(k: string) => this.root.querySelector<T>(`[data-k="${k}"]`)!;
     this.pauseBtn = q<HTMLButtonElement>("pause");
@@ -335,6 +353,8 @@ export class Controls {
     q("reset").addEventListener("click", () => this.reset());
     q("species").addEventListener("click", () => this.handlers.onToggleSpecies());
     q("help").addEventListener("click", () => this.handlers.onToggleHelp());
+    q("theme").addEventListener("click", () => this.handlers.onToggleTheme());
+    q("hide").addEventListener("click", () => this.togglePanel(false));
     q("dice").addEventListener("click", () => {
       this.seedInput.value = randomSeed();
       this.reset();
@@ -356,8 +376,10 @@ export class Controls {
         this.handlers.onToggleSpecies();
       } else if (e.key === "?") {
         this.handlers.onToggleHelp();
+      } else if (e.key === "t" || e.key === "T") {
+        this.handlers.onToggleTheme();
       } else if (e.key === "h" || e.key === "H") {
-        this.root.classList.toggle("hidden");
+        this.togglePanel();
       }
     });
   }
@@ -396,12 +418,23 @@ export class Controls {
     }
   }
 
+  /** Show or hide the panel; while hidden, a small corner button brings it back. */
+  togglePanel(show = this.root.classList.contains("hidden")): void {
+    this.root.classList.toggle("hidden", !show);
+    this.showBtn.hidden = show;
+  }
+
+  /** Redraw canvas-drawn parts, e.g. after a theme change. */
+  redraw(): void {
+    this.drawSpark();
+  }
+
   private drawSpark(): void {
     const i = drawSparkline(this.spark, this.samples, this.sparkHover);
     const s = i !== null ? this.samples[i] : this.samples[this.samples.length - 1];
     const sw = (c: string) => `<i style="background:${c}"></i>`;
     this.sparkText.innerHTML = s
-      ? `${sw(SPECIES_COLOR)}${s.species} species ${sw(FAMILIES_COLOR)}${s.families} families` +
+      ? `${sw(speciesColor())}${s.species} species ${sw(familiesColor())}${s.families} families` +
         (i !== null ? ` <span class="when">${formatTime(s.t)}</span>` : "")
       : "";
   }

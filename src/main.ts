@@ -8,6 +8,7 @@ import { SpeciesDrawer } from "./ui/species";
 import { HelpOverlay } from "./ui/help";
 import { History } from "./ui/sparkline";
 import { FamilyColors } from "./render/familyColors";
+import { theme, setTheme } from "./render/theme";
 import { familySummary } from "./chem/family";
 import { print } from "./lambda/print";
 import { parse } from "./lambda/parse";
@@ -62,6 +63,11 @@ const controls = new Controls(
     onReset: reset,
     onToggleSpecies: () => drawer.toggle(),
     onToggleHelp: () => help.toggle(),
+    onToggleTheme: () => {
+      setTheme(theme.name === "dark" ? "light" : "dark");
+      renderer.applyTheme();
+      controls.redraw(); // the drawer's family swatches follow on its next refresh
+    },
     onModeChange: applyMode,
     onViewChange: applyView,
     onRemoveWall: () => {

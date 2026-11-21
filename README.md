@@ -82,7 +82,8 @@ Shift-click the soup to drop 10 molecules at that spot: copies of the expression
 | `Space` | Pause / play |
 | `R` | Reset (same seed gives the same starting soup) |
 | `L` | Species list |
-| `H` | Hide the panel |
+| `T` | Light / dark theme |
+| `H` | Hide the panel (the corner button brings it back) |
 | `?` | This help |
 
 The panel also has the simulation speed (0.25× to 8×), the starting number of molecules (applied on reset) and the seed.

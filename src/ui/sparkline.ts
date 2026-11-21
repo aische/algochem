@@ -1,3 +1,5 @@
+import { theme } from "../render/theme";
+
 /** One sample of the soup's diversity. */
 export interface Sample {
   /** Sim time (s). */
@@ -38,8 +40,8 @@ export class History {
   }
 }
 
-export const SPECIES_COLOR = "#5aa9ff";
-export const FAMILIES_COLOR = "#ff8a3d";
+export const speciesColor = () => theme.families[0];
+export const familiesColor = () => theme.families[1];
 
 /**
  * Two lines on one log-scaled count axis (1 at the bottom, the run's highest
@@ -59,7 +61,7 @@ export function drawSparkline(canvas: HTMLCanvasElement, samples: Sample[], hove
   ctx.clearRect(0, 0, w, h);
 
   // Recessive baseline.
-  ctx.strokeStyle = "rgba(255, 255, 255, 0.1)";
+  ctx.strokeStyle = theme.grid;
   ctx.lineWidth = 1;
   ctx.beginPath();
   ctx.moveTo(0, h - 0.5);
@@ -85,7 +87,7 @@ export function drawSparkline(canvas: HTMLCanvasElement, samples: Sample[], hove
     });
   }
   if (hover !== null) {
-    ctx.strokeStyle = "rgba(255, 255, 255, 0.25)";
+    ctx.strokeStyle = theme.gridStrong;
     ctx.beginPath();
     ctx.moveTo(Math.round(x(samples[hover])) + 0.5, 0);
     ctx.lineTo(Math.round(x(samples[hover])) + 0.5, h);
@@ -95,8 +97,8 @@ export function drawSparkline(canvas: HTMLCanvasElement, samples: Sample[], hove
   ctx.lineWidth = 1.5;
   ctx.lineJoin = "round";
   for (const [key, color] of [
-    ["families", FAMILIES_COLOR],
-    ["species", SPECIES_COLOR],
+    ["families", familiesColor()],
+    ["species", speciesColor()],
   ] as const) {
     ctx.strokeStyle = color;
     ctx.beginPath();
