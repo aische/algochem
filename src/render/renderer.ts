@@ -13,6 +13,7 @@ const GLOW_TIME = 1.2; // seconds a new product glows
 const FADE_IN = 0.35;
 const FLASH_MS = 450;
 const SPRITE_CACHE_MAX = 4000;
+const DIM_ALPHA = 0.2; // other species while one is highlighted
 
 interface Sprite {
   canvas: HTMLCanvasElement;
@@ -68,8 +69,11 @@ export class Renderer {
     this.flashes.push({ x, y, t0: now });
   }
 
-  /** Draw the world; `zoom` < 1 shows more world per screen pixel. */
-  draw(world: World, now: number, hovered: Particle | null, zoom = 1): void {
+  /**
+   * Draw the world; `zoom` < 1 shows more world per screen pixel. When
+   * `highlight` is a species id, that species is lit and the rest dimmed.
+   */
+  draw(world: World, now: number, hovered: Particle | null, zoom = 1, highlight: number | null = null): void {
     this.frame++;
     const { ctx, dpr } = this;
     const W = world.width;
@@ -84,6 +88,11 @@ export class Renderer {
     // Halos behind freshly made products (additive, stretched to the label).
     ctx.globalCompositeOperation = "lighter";
     for (const p of world.particles) {
+      if (highlight !== null && p.term.id === highlight && p.dying < 0) {
+        ctx.globalAlpha = 0.5;
+        ctx.drawImage(this.haloSprite, p.x - p.w / 2 - 22, p.y - p.h / 2 - 14, p.w + 44, p.h + 28);
+        continue;
+      }
       if (p.dying >= 0 || p.age >= GLOW_TIME) continue;
       const k = 1 - p.age / GLOW_TIME;
       ctx.globalAlpha = 0.55 * k * k;
@@ -99,6 +108,7 @@ export class Renderer {
       let alpha = 1;
       if (p.dying >= 0) alpha = Math.max(0, 1 - p.dying / world.cfg.dissolveTime);
       else if (p.age < FADE_IN) alpha = p.age / FADE_IN;
+      if (highlight !== null) alpha = p.term.id === highlight ? 1 : alpha * DIM_ALPHA;
       ctx.globalAlpha = p === hovered ? 1 : alpha;
       this.blitWrapped(s, p.x, p.y, W, H);
     }

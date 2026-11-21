@@ -9,6 +9,7 @@ export interface ControlState {
 
 export interface ControlHandlers {
   onReset(): void;
+  onToggleSpecies(): void;
 }
 
 /** Small floating panel: pause, speed, seed, population, reset. */
@@ -27,6 +28,7 @@ export class Controls {
         <button data-k="pause" title="Space">Pause</button>
         <button data-k="reset" title="R">Reset</button>
       </div>
+      <button data-k="species" title="L">Species list</button>
       <label>speed <span data-k="speedv"></span>
         <input data-k="speed" type="range" min="0" max="${SPEEDS.length - 1}" step="1">
       </label>
@@ -39,7 +41,7 @@ export class Controls {
           <button data-k="dice" title="Random seed">⚄</button>
         </span>
       </label>
-      <div class="hint">drag to stir · space pause · R reset · H hide</div>
+      <div class="hint">drag to stir · space pause · R reset · L species · H hide</div>
     `;
     parent.appendChild(this.root);
 
@@ -75,9 +77,15 @@ export class Controls {
 
     this.pauseBtn.addEventListener("click", () => this.togglePause());
     q("reset").addEventListener("click", () => this.reset());
+    q("species").addEventListener("click", () => this.handlers.onToggleSpecies());
     q("dice").addEventListener("click", () => {
       this.seedInput.value = randomSeed();
       this.reset();
+    });
+
+    // Drop focus after clicks so Space toggles pause instead of re-pressing a button.
+    this.root.addEventListener("click", (e) => {
+      if (e.target instanceof HTMLButtonElement) e.target.blur();
     });
 
     window.addEventListener("keydown", (e) => {
@@ -87,6 +95,8 @@ export class Controls {
         this.togglePause();
       } else if (e.key === "r" || e.key === "R") {
         this.reset();
+      } else if (e.key === "l" || e.key === "L") {
+        this.handlers.onToggleSpecies();
       } else if (e.key === "h" || e.key === "H") {
         this.root.classList.toggle("hidden");
       }

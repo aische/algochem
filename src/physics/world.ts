@@ -65,10 +65,21 @@ export interface Stir {
   strength: number;
 }
 
+export interface SpeciesInfo {
+  term: Term;
+  count: number;
+  /** Sim time (s) the species (re)appeared. */
+  firstSeen: number;
+}
+
 export type Measure = (t: Term) => { w: number; h: number };
 
 export class World {
   particles: Particle[] = [];
+  /** Simulated seconds since the world was created. */
+  time = 0;
+  /** Sim time at which each live species (term id) first appeared. */
+  private firstSeen = new Map<number, number>();
   stir: Stir | null = null;
 
   // Toroidal broad-phase grid. Cell sizes divide the world exactly so cell
@@ -118,6 +129,22 @@ export class World {
     return a / (this.width * this.height);
   }
 
+  /**
+   * One entry per live species. Also forgets first-seen times of extinct
+   * species, so a species that dies out and re-forms counts as new again.
+   */
+  speciesSummary(): SpeciesInfo[] {
+    const byId = new Map<number, SpeciesInfo>();
+    for (const p of this.particles) {
+      if (p.dying >= 0) continue;
+      const e = byId.get(p.term.id);
+      if (e) e.count++;
+      else byId.set(p.term.id, { term: p.term, count: 1, firstSeen: this.firstSeen.get(p.term.id) ?? 0 });
+    }
+    for (const id of this.firstSeen.keys()) if (!byId.has(id)) this.firstSeen.delete(id);
+    return [...byId.values()];
+  }
+
   aliveCount(): number {
     let n = 0;
     for (const p of this.particles) if (p.dying < 0) n++;
@@ -143,6 +170,7 @@ export class World {
   }
 
   step(dt: number, events: ReactionEvent[]): void {
+    this.time += dt;
     this.integrate(dt);
     this.collide(events);
     this.reap(dt);
@@ -151,6 +179,10 @@ export class World {
   // -------------------------------------------------------------------------
 
   private spawn(term: Term, x: number, y: number): Particle {
+    if (!this.firstSeen.has(term.id)) {
+      this.firstSeen.set(term.id, this.time);
+      if (this.firstSeen.size > 8 * this.particles.length + 1000) this.speciesSummary(); // prune
+    }
     const { w, h } = this.measure(term);
     return { term, x, y, vx: 0, vy: 0, w, h, cooldown: 0, age: 0, dying: -1 };
   }

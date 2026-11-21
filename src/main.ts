@@ -4,6 +4,7 @@ import { Reactor, randomSoup, DEFAULT_CHEM } from "./chem/soup";
 import { World, type ReactionEvent, type Particle } from "./physics/world";
 import { Renderer } from "./render/renderer";
 import { Controls, randomSeed } from "./ui/controls";
+import { SpeciesDrawer } from "./ui/species";
 import { print } from "./lambda/print";
 
 const DT = 1 / 60; // fixed simulation step (s)
@@ -33,10 +34,11 @@ const controls = new Controls(
     seed: params.get("seed") ?? randomSeed(),
     population: clamp(Number(params.get("n")) || 600, 300, 1000),
   },
-  { onReset: reset },
+  { onReset: reset, onToggleSpecies: () => drawer.toggle() },
 );
 
 let world: World;
+const drawer = new SpeciesDrawer(document.body, () => world);
 let zoom = 1;
 
 function reset(): void {
@@ -48,6 +50,7 @@ function reset(): void {
   const url = new URL(location.href);
   url.searchParams.set("seed", seed);
   history.replaceState(null, "", url);
+  drawer.reset();
 }
 
 function updateZoom(dt: number): void {
@@ -154,8 +157,9 @@ function frame(now: number): void {
 
   const tSim = performance.now();
   const hovered = mouse.inside && !mouse.down ? world.pick(mouse.x / zoom, mouse.y / zoom) : null;
-  renderer.draw(world, now, hovered, zoom);
+  renderer.draw(world, now, hovered, zoom, drawer.highlight);
   updateTooltip(hovered);
+  drawer.tick(now);
   if (perf) perf.sample(tSim - tStart, performance.now() - tSim);
   requestAnimationFrame(frame);
 }
