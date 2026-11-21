@@ -1,23 +1,46 @@
-import type { World, SpeciesInfo } from "../physics/world";
-import { print } from "../lambda/print";
+import type { World } from "../physics/world";
+import type { Term } from "../lambda/term";
+import { print, printCompact } from "../lambda/print";
+import { familyKey, familySummary } from "../chem/family";
+import type { Highlight } from "../render/renderer";
 
-export type SortMode = "count" | "newest";
+export type SortMode = "count" | "newest" | "families";
 
 const REFRESH_MS = 1000;
+
+/** Display settings the drawer follows. */
+export interface DrawerView {
+  compact: boolean;
+  /** Color of a family (by key), or null when it has none. */
+  colorOf(familyKey: string): string | null;
+}
 
 interface Row {
   el: HTMLLIElement;
   count: HTMLSpanElement;
   meta: HTMLSpanElement;
   bar: HTMLSpanElement;
+  swatch: HTMLElement;
   text: string;
 }
 
+/** One list entry: a species or, in the families view, a family. */
+interface Entry {
+  /** Row key: "s<species id>" or "f<family key>". */
+  key: string;
+  term: Term;
+  count: number;
+  firstSeen: number;
+  family: string;
+  /** Families view: number of species in the family. */
+  species?: number;
+}
+
 /**
- * Side drawer listing every species in the soup with its count. Hovering a
- * row highlights that species in the soup; clicking pins the highlight.
- * The list refreshes about once a second and holds still while the pointer
- * is over it, so rows can be read and hovered.
+ * Side drawer listing every species (or family) in the soup with its count.
+ * Hovering a row highlights its molecules in the soup; clicking pins the
+ * highlight. The list refreshes about once a second and holds still while
+ * the pointer is over it, so rows can be read and hovered.
  */
 export class SpeciesDrawer {
   isOpen = false;
@@ -27,15 +50,16 @@ export class SpeciesDrawer {
   private list: HTMLOListElement;
   private summary: HTMLElement;
   private tip: HTMLElement;
-  private rows = new Map<number, Row>();
-  private hoveredId: number | null = null;
-  private pinnedId: number | null = null;
+  private rows = new Map<string, Row>();
+  private hoveredKey: string | null = null;
+  private pinnedKey: string | null = null;
   private pointerInside = false;
   private lastRefresh = -Infinity;
 
   constructor(
     parent: HTMLElement,
     private getWorld: () => World,
+    private view: DrawerView,
   ) {
     this.root = document.createElement("aside");
     this.root.className = "drawer";
@@ -49,6 +73,7 @@ export class SpeciesDrawer {
         <div class="seg">
           <button data-sort="count" class="on">By count</button>
           <button data-sort="newest">Newest</button>
+          <button data-sort="families" title="Species that differ only in unused leading binders, grouped">Families</button>
         </div>
       </header>
       <ol class="species-list"></ol>
@@ -68,9 +93,11 @@ export class SpeciesDrawer {
 
     for (const b of this.root.querySelectorAll<HTMLButtonElement>("[data-sort]")) {
       b.addEventListener("click", () => {
+        const grouping = (this.sort === "families") !== (b.dataset.sort === "families");
         this.sort = b.dataset.sort as SortMode;
         for (const o of this.root.querySelectorAll("[data-sort]")) o.classList.toggle("on", o === b);
         this.list.scrollTop = 0;
+        if (grouping) this.clearRows(); // species rows and family rows are different things
         this.refresh();
       });
     }
@@ -82,20 +109,26 @@ export class SpeciesDrawer {
     });
     this.list.addEventListener("pointerover", (e) => {
       const li = (e.target as HTMLElement).closest("li");
-      if (li) this.setHovered(Number(li.dataset.id));
+      if (li) this.setHovered(li.dataset.key!);
     });
     this.list.addEventListener("click", (e) => {
       const li = (e.target as HTMLElement).closest("li");
       if (!li) return;
-      const id = Number(li.dataset.id);
-      this.setPinned(this.pinnedId === id ? null : id);
+      const key = li.dataset.key!;
+      this.setPinned(this.pinnedKey === key ? null : key);
     });
-    this.list.addEventListener("scroll", () => this.tip.hidden = true);
+    this.list.addEventListener("scroll", () => (this.tip.hidden = true));
   }
 
-  /** Species id to highlight in the soup, if any. */
-  get highlight(): number | null {
-    return this.isOpen ? (this.hoveredId ?? this.pinnedId) : null;
+  /** Molecules to highlight in the soup, if any. */
+  get highlight(): Highlight | null {
+    if (!this.isOpen) return null;
+    const key = this.hoveredKey ?? this.pinnedKey;
+    if (key === null) return null;
+    const rest = key.slice(1);
+    if (key[0] === "f") return (t) => familyKey(t) === rest;
+    const id = Number(rest);
+    return (t) => t.id === id;
   }
 
   toggle(open = !this.isOpen): void {
@@ -109,12 +142,9 @@ export class SpeciesDrawer {
     }
   }
 
-  /** Call after the world is replaced. */
+  /** Call after the world is replaced or the label style changed. */
   reset(): void {
-    this.setPinned(null);
-    this.setHovered(null);
-    for (const r of this.rows.values()) r.el.remove();
-    this.rows.clear();
+    this.clearRows();
     if (this.isOpen) this.refresh();
   }
 
@@ -125,46 +155,80 @@ export class SpeciesDrawer {
 
   // -------------------------------------------------------------------------
 
+  private clearRows(): void {
+    this.setPinned(null);
+    this.setHovered(null);
+    for (const r of this.rows.values()) r.el.remove();
+    this.rows.clear();
+  }
+
+  private entries(): { entries: Entry[]; species: number; families: number; total: number } {
+    const world = this.getWorld();
+    const species = world.speciesSummary();
+    const families = familySummary(species);
+    const total = species.reduce((n, s) => n + s.count, 0);
+    const entries: Entry[] =
+      this.sort === "families"
+        ? families.map((f) => ({
+            key: "f" + f.key,
+            term: f.term,
+            count: f.count,
+            firstSeen: f.firstSeen,
+            family: f.key,
+            species: f.species,
+          }))
+        : species.map((s) => ({
+            key: "s" + s.term.id,
+            term: s.term,
+            count: s.count,
+            firstSeen: s.firstSeen,
+            family: familyKey(s.term),
+          }));
+    return { entries, species: species.length, families: families.length, total };
+  }
+
   private refresh(): void {
     this.lastRefresh = performance.now();
     const world = this.getWorld();
-    const species = world.speciesSummary();
-    const total = species.reduce((n, s) => n + s.count, 0);
-    const byCount = (a: SpeciesInfo, b: SpeciesInfo) => b.count - a.count || a.term.id - b.term.id;
-    species.sort(
-      this.sort === "count" ? byCount : (a, b) => b.firstSeen - a.firstSeen || byCount(a, b),
-    );
-    const maxCount = species.reduce((m, s) => Math.max(m, s.count), 1);
+    const { entries, species, families, total } = this.entries();
+    const byCount = (a: Entry, b: Entry) => b.count - a.count || (a.key < b.key ? -1 : 1);
+    entries.sort(this.sort === "newest" ? (a, b) => b.firstSeen - a.firstSeen || byCount(a, b) : byCount);
+    const maxCount = entries.reduce((m, s) => Math.max(m, s.count), 1);
 
-    this.summary.textContent = `${species.length} species · ${total} molecules`;
+    this.summary.textContent = `${species} species · ${families} families · ${total} molecules`;
 
-    const live = new Set<number>();
-    for (const s of species) {
-      const id = s.term.id;
-      live.add(id);
-      let row = this.rows.get(id);
-      if (!row) row = this.makeRow(id, print(s.term));
-      row.count.textContent = String(s.count);
+    const live = new Set<string>();
+    for (const e of entries) {
+      live.add(e.key);
+      let row = this.rows.get(e.key);
+      if (!row) row = this.makeRow(e.key, this.view.compact ? printCompact(e.term) : print(e.term));
+      row.count.textContent = String(e.count);
       row.meta.textContent =
-        this.sort === "count" ? `${((100 * s.count) / total).toFixed(1)}%` : formatAge(world.time - s.firstSeen);
-      row.bar.style.width = `${(100 * s.count) / maxCount}%`;
+        this.sort === "newest"
+          ? formatAge(world.time - e.firstSeen)
+          : this.sort === "families"
+            ? `${e.species} sp`
+            : `${((100 * e.count) / total).toFixed(1)}%`;
+      row.bar.style.width = `${(100 * e.count) / maxCount}%`;
+      const color = this.view.colorOf(e.family);
+      row.swatch.style.background = color ?? "transparent";
       this.list.appendChild(row.el); // moves existing rows into sorted order
     }
-    for (const [id, row] of this.rows) {
-      if (!live.has(id)) {
+    for (const [key, row] of this.rows) {
+      if (!live.has(key)) {
         row.el.remove();
-        this.rows.delete(id);
+        this.rows.delete(key);
       }
     }
-    if (this.pinnedId !== null && !live.has(this.pinnedId)) this.setPinned(null);
+    if (this.pinnedKey !== null && !live.has(this.pinnedKey)) this.setPinned(null);
   }
 
-  private makeRow(id: number, text: string): Row {
+  private makeRow(key: string, text: string): Row {
     const el = document.createElement("li");
-    el.dataset.id = String(id);
-    el.innerHTML = `<span class="bar"></span><span class="count"></span><span class="term"></span><span class="meta"></span>`;
+    el.dataset.key = key;
+    el.innerHTML = `<span class="bar"></span><span class="count"></span><span class="term"><i class="sw"></i><span></span></span><span class="meta"></span>`;
     const termEl = el.querySelector<HTMLSpanElement>(".term")!;
-    termEl.textContent = text;
+    termEl.lastElementChild!.textContent = text;
     el.addEventListener("pointerenter", () => {
       // Full term beside the drawer, only when the row truncates it.
       if (termEl.scrollWidth <= termEl.clientWidth) return;
@@ -180,22 +244,23 @@ export class SpeciesDrawer {
       count: el.querySelector(".count")!,
       meta: el.querySelector(".meta")!,
       bar: el.querySelector(".bar")!,
+      swatch: el.querySelector(".sw")!,
       text,
     };
-    if (id === this.pinnedId) el.classList.add("pinned");
-    this.rows.set(id, row);
+    if (key === this.pinnedKey) el.classList.add("pinned");
+    this.rows.set(key, row);
     return row;
   }
 
-  private setHovered(id: number | null): void {
-    this.hoveredId = id;
-    if (id === null) this.tip.hidden = true;
+  private setHovered(key: string | null): void {
+    this.hoveredKey = key;
+    if (key === null) this.tip.hidden = true;
   }
 
-  private setPinned(id: number | null): void {
-    if (this.pinnedId !== null) this.rows.get(this.pinnedId)?.el.classList.remove("pinned");
-    this.pinnedId = id;
-    if (id !== null) this.rows.get(id)?.el.classList.add("pinned");
+  private setPinned(key: string | null): void {
+    if (this.pinnedKey !== null) this.rows.get(this.pinnedKey)?.el.classList.remove("pinned");
+    this.pinnedKey = key;
+    if (key !== null) this.rows.get(key)?.el.classList.add("pinned");
   }
 }
 

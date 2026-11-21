@@ -1,6 +1,11 @@
 import type { ReactionMode, RefillBy } from "../physics/world";
+import { parse } from "../lambda/parse";
+import { drawSparkline, FAMILIES_COLOR, SPECIES_COLOR, type Sample } from "./sparkline";
 
 export const SPEEDS = [0.25, 0.5, 1, 2, 4, 8];
+export const MIXES = [0.25, 0.5, 1, 2, 4, 8];
+/** Choices for the leading-binder limit; 0 = off. */
+export const BINDER_LIMITS = [0, 6, 8, 12];
 
 export interface ControlState {
   paused: boolean;
@@ -14,14 +19,30 @@ export interface ControlState {
   refillBy: RefillBy;
   /** Conserve total mass (AST nodes) via a free-mass pool. */
   conserve: boolean;
+  /** Brownian motion multiplier (see World.mixing). */
+  mixing: number;
+  /** Refuse products with more leading binders than this; 0 = off. */
+  maxBinders: number;
+  /** Compact labels: unused binders as `_`. */
+  compact: boolean;
+  /** Color molecules by family. */
+  colorFamilies: boolean;
+  /** Reset into two halves (seed | seed2) with a wall between them. */
+  split: boolean;
+  seed2: string;
+  /** Expression dropped by shift-click; empty = random molecules. */
+  drop: string;
 }
 
 export interface ControlHandlers {
   onReset(): void;
   onToggleSpecies(): void;
   onToggleHelp(): void;
-  /** Mode, inflow or conservation changed (applies live). */
+  /** Mode, inflow, conservation, binder limit or mixing changed (applies live). */
   onModeChange(): void;
+  /** Label style or coloring changed. */
+  onViewChange(): void;
+  onRemoveWall(): void;
 }
 
 /** Small floating panel: pause, mode, speed, seed, population, reset. */
@@ -32,6 +53,11 @@ export class Controls {
   private seedInput: HTMLInputElement;
   private aliveEl: HTMLElement;
   private gauge!: { root: HTMLElement; fill: HTMLElement; text: HTMLElement };
+  private spark: HTMLCanvasElement;
+  private sparkText: HTMLElement;
+  private samples: Sample[] = [];
+  private sparkHover: number | null = null;
+  private wallBtn: HTMLButtonElement;
 
   constructor(parent: HTMLElement, initial: ControlState, private handlers: ControlHandlers) {
     this.state = { ...initial };
@@ -44,6 +70,10 @@ export class Controls {
         <button data-k="help" class="help-btn" title="Help (?)">?</button>
       </div>
       <button data-k="species" title="L">Species list</button>
+      <div class="field diversity">
+        <canvas data-k="spark" class="spark" title="Species and families over the run (log scale)"></canvas>
+        <div class="spark-text" data-k="sparktext"></div>
+      </div>
       <div class="field">
         <span class="field-label">reaction</span>
         <div class="seg">
@@ -68,8 +98,17 @@ export class Controls {
           <div class="gauge-text" data-k="gaugetext"></div>
         </div>
       </div>
+      <div class="field" title="Products with more leading binders are refused. Stops the growth of unused binders">
+        <span class="field-label">max leading binders</span>
+        <div class="seg mini" data-k="binders">
+          ${BINDER_LIMITS.map((n) => `<button data-binders="${n}">${n || "off"}</button>`).join("")}
+        </div>
+      </div>
       <label>speed <span data-k="speedv"></span>
         <input data-k="speed" type="range" min="0" max="${SPEEDS.length - 1}" step="1">
+      </label>
+      <label title="How fast molecules wander. Low: regions evolve separately. High: close to a well-mixed soup">mixing <span data-k="mixv"></span>
+        <input data-k="mix" type="range" min="0" max="${MIXES.length - 1}" step="1">
       </label>
       <label>molecules <span data-k="popv"></span>
         <input data-k="pop" type="range" min="300" max="1000" step="50">
@@ -80,8 +119,30 @@ export class Controls {
           <button data-k="dice" title="Random seed">⚄</button>
         </span>
       </label>
+      <div class="field">
+        <label class="check" title="On reset, the left half starts from the seed and the right half from a second seed, with a wall between them">
+          <input data-k="split" type="checkbox"> split, right half seed
+        </label>
+        <span class="row">
+          <input data-k="seed2" type="text" spellcheck="false">
+          <button data-k="dice2" title="Random second seed">⚄</button>
+        </span>
+        <button data-k="wall" hidden>Remove wall</button>
+      </div>
+      <div class="field">
+        <span class="field-label">view</span>
+        <label class="check" title="Unused binders print as _ (a run of n as _ⁿ); hover a molecule for the full expression">
+          <input data-k="compact" type="checkbox"> compact labels
+        </label>
+        <label class="check" title="The largest families get their own color">
+          <input data-k="color" type="checkbox"> color by family
+        </label>
+      </div>
+      <label title="Shift-click the soup to drop 10 copies of this expression, or 10 random molecules if empty">shift-click drops
+        <input data-k="drop" type="text" spellcheck="false" placeholder="random molecules">
+      </label>
       <div class="alive"><span data-k="alive">0</span> molecules now</div>
-      <div class="hint">drag to stir · space pause · R reset · L species · H hide · ? help</div>
+      <div class="hint">drag to stir · shift-click drop · space pause · R reset · L species · H hide · ? help</div>
     `;
     parent.appendChild(this.root);
 
@@ -93,6 +154,9 @@ export class Controls {
     const pop = q<HTMLInputElement>("pop");
     const popv = q("popv");
     this.aliveEl = q("alive");
+    this.spark = q<HTMLCanvasElement>("spark");
+    this.sparkText = q("sparktext");
+    this.wallBtn = q<HTMLButtonElement>("wall");
 
     const modeBtns = this.root.querySelectorAll<HTMLButtonElement>("[data-mode]");
     const inflow = q<HTMLInputElement>("inflow");
@@ -148,6 +212,102 @@ export class Controls {
       this.handlers.onModeChange();
     });
     syncMode();
+
+    const binderBtns = this.root.querySelectorAll<HTMLButtonElement>("[data-binders]");
+    const syncBinders = () => {
+      for (const b of binderBtns) b.classList.toggle("on", Number(b.dataset.binders) === this.state.maxBinders);
+    };
+    for (const b of binderBtns) {
+      b.addEventListener("click", () => {
+        this.state.maxBinders = Number(b.dataset.binders);
+        syncBinders();
+        this.handlers.onModeChange();
+      });
+    }
+    syncBinders();
+
+    const mix = q<HTMLInputElement>("mix");
+    const mixv = q("mixv");
+    mix.value = String(Math.max(0, MIXES.indexOf(this.state.mixing)));
+    const syncMix = () => {
+      this.state.mixing = MIXES[Number(mix.value)];
+      mixv.textContent = `${this.state.mixing}×`;
+    };
+    mix.addEventListener("input", () => {
+      syncMix();
+      this.handlers.onModeChange();
+    });
+    syncMix();
+
+    const checkbox = (k: string, get: () => boolean, set: (v: boolean) => void, after: () => void) => {
+      const el = q<HTMLInputElement>(k);
+      el.checked = get();
+      el.addEventListener("change", () => {
+        set(el.checked);
+        el.blur(); // keep Space for pause
+        after();
+      });
+    };
+    checkbox("compact", () => this.state.compact, (v) => (this.state.compact = v), () => this.handlers.onViewChange());
+    checkbox("color", () => this.state.colorFamilies, (v) => (this.state.colorFamilies = v), () => this.handlers.onViewChange());
+
+    const seed2 = q<HTMLInputElement>("seed2");
+    const syncSplit = () => {
+      seed2.disabled = !this.state.split;
+      seed2.parentElement!.classList.toggle("disabled", !this.state.split);
+    };
+    checkbox(
+      "split",
+      () => this.state.split,
+      (v) => {
+        this.state.split = v;
+        if (v && !seed2.value.trim()) seed2.value = this.state.seed2 = randomSeed();
+      },
+      syncSplit,
+    );
+    seed2.value = this.state.seed2;
+    syncSplit();
+    seed2.addEventListener("keydown", (e) => {
+      e.stopPropagation();
+      if (e.key === "Enter") this.reset();
+    });
+    q("dice2").addEventListener("click", () => {
+      seed2.value = randomSeed();
+      if (this.state.split) this.reset();
+      else this.state.seed2 = seed2.value;
+    });
+    this.wallBtn.addEventListener("click", () => this.handlers.onRemoveWall());
+
+    const drop = q<HTMLInputElement>("drop");
+    drop.value = this.state.drop;
+    const syncDrop = () => {
+      this.state.drop = drop.value.trim();
+      let error = "";
+      if (this.state.drop) {
+        try {
+          parse(this.state.drop);
+        } catch (e) {
+          error = (e as Error).message;
+        }
+      }
+      drop.classList.toggle("invalid", error !== "");
+      drop.title = error;
+    };
+    drop.addEventListener("input", syncDrop);
+    drop.addEventListener("keydown", (e) => {
+      e.stopPropagation();
+      if (e.key === "Enter" || e.key === "Escape") drop.blur();
+    });
+    syncDrop();
+
+    this.spark.addEventListener("pointermove", (e) => {
+      this.sparkHover = e.offsetX;
+      this.drawSpark();
+    });
+    this.spark.addEventListener("pointerleave", () => {
+      this.sparkHover = null;
+      this.drawSpark();
+    });
 
     speed.value = String(Math.max(0, SPEEDS.indexOf(this.state.speed)));
     const syncSpeed = () => {
@@ -214,6 +374,38 @@ export class Controls {
       : `off · ${fmt(soupMass)} in soup`;
   }
 
+  /** New diversity history; redraws the sparkline and its readout. */
+  setHistory(samples: Sample[]): void {
+    this.samples = samples;
+    this.drawSpark();
+  }
+
+  /** Show the "Remove wall" button while the wall is up. */
+  setWall(up: boolean): void {
+    this.wallBtn.hidden = !up;
+  }
+
+  /** The drop expression, if it is a valid closed term. */
+  dropExpression(): string | null {
+    if (!this.state.drop) return null;
+    try {
+      parse(this.state.drop);
+      return this.state.drop;
+    } catch {
+      return null;
+    }
+  }
+
+  private drawSpark(): void {
+    const i = drawSparkline(this.spark, this.samples, this.sparkHover);
+    const s = i !== null ? this.samples[i] : this.samples[this.samples.length - 1];
+    const sw = (c: string) => `<i style="background:${c}"></i>`;
+    this.sparkText.innerHTML = s
+      ? `${sw(SPECIES_COLOR)}${s.species} species ${sw(FAMILIES_COLOR)}${s.families} families` +
+        (i !== null ? ` <span class="when">${formatTime(s.t)}</span>` : "")
+      : "";
+  }
+
   togglePause(): void {
     this.state.paused = !this.state.paused;
     this.pauseBtn.textContent = this.state.paused ? "Play" : "Pause";
@@ -222,11 +414,21 @@ export class Controls {
   private reset(): void {
     this.state.seed = this.seedInput.value.trim() || randomSeed();
     this.seedInput.value = this.state.seed;
+    const seed2 = this.root.querySelector<HTMLInputElement>('[data-k="seed2"]')!;
+    if (this.state.split) {
+      this.state.seed2 = seed2.value.trim() || randomSeed();
+      seed2.value = this.state.seed2;
+    }
     this.handlers.onReset();
   }
 }
 
 const fmt = (n: number) => Math.round(n).toLocaleString("en-US");
+
+function formatTime(s: number): string {
+  const m = Math.floor(s / 60);
+  return m > 0 ? `${m}m ${String(Math.floor(s % 60)).padStart(2, "0")}s` : `${Math.floor(s)}s`;
+}
 
 export function randomSeed(): string {
   return Math.random().toString(36).slice(2, 8);

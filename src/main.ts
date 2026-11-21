@@ -3,10 +3,15 @@ import { Rng } from "./rng";
 import { Reactor, randomSoup, DEFAULT_CHEM } from "./chem/soup";
 import { World, type ReactionEvent, type Particle } from "./physics/world";
 import { Renderer } from "./render/renderer";
-import { Controls, randomSeed } from "./ui/controls";
+import { Controls, randomSeed, MIXES, BINDER_LIMITS } from "./ui/controls";
 import { SpeciesDrawer } from "./ui/species";
 import { HelpOverlay } from "./ui/help";
+import { History } from "./ui/sparkline";
+import { FamilyColors } from "./render/familyColors";
+import { familySummary } from "./chem/family";
 import { print } from "./lambda/print";
+import { parse } from "./lambda/parse";
+import { randomClosedTerm } from "./lambda/random";
 
 const DT = 1 / 60; // fixed simulation step (s)
 const MAX_STEPS_PER_FRAME = 16;
@@ -15,6 +20,8 @@ const MAX_STEPS_PER_FRAME = 16;
 const SIM_BUDGET_MS = 8;
 const STIR_RADIUS = 110;
 const STIR_STRENGTH = 10;
+const DROP_COUNT = 10; // molecules per shift-click
+const COLOR_UPDATE_MS = 1000;
 // Evolved terms tend to get longer. The camera eases out so labels cover at
 // most about this fraction of the screen.
 const TARGET_COVERAGE = 0.65;
@@ -25,6 +32,11 @@ const canvas = document.querySelector<HTMLCanvasElement>("#soup")!;
 const tooltip = document.querySelector<HTMLDivElement>("#tooltip")!;
 const renderer = new Renderer(canvas);
 const reactor = new Reactor(DEFAULT_CHEM);
+const colors = new FamilyColors();
+const history = new History();
+renderer.colorSlot = colors.slotOf;
+// Random molecules dropped by shift-click; not tied to the seed.
+const dropRng = new Rng(Math.floor(Math.random() * 2 ** 32));
 
 const params = new URLSearchParams(location.search);
 const controls = new Controls(
@@ -38,37 +50,86 @@ const controls = new Controls(
     inflow: params.get("inflow") !== "0",
     refillBy: params.get("refill") === "mass" ? "mass" : "count",
     conserve: params.get("conserve") === "1",
+    mixing: MIXES.includes(Number(params.get("mix"))) ? Number(params.get("mix")) : 1,
+    maxBinders: BINDER_LIMITS.includes(Number(params.get("binders"))) ? Number(params.get("binders")) : 0,
+    compact: params.get("compact") === "1",
+    colorFamilies: params.get("color") === "1",
+    split: params.has("split"),
+    seed2: params.get("split") || randomSeed(),
+    drop: "",
   },
   {
     onReset: reset,
     onToggleSpecies: () => drawer.toggle(),
     onToggleHelp: () => help.toggle(),
     onModeChange: applyMode,
+    onViewChange: applyView,
+    onRemoveWall: () => {
+      world.wall = false;
+      controls.setWall(false);
+    },
   },
 );
 
 let world: World;
-const drawer = new SpeciesDrawer(document.body, () => world);
+const drawer = new SpeciesDrawer(document.body, () => world, {
+  get compact() {
+    return renderer.compact;
+  },
+  colorOf: (key) => colors.colorOf(key),
+});
 const help = new HelpOverlay(document.body);
 let zoom = 1;
 
 function reset(): void {
-  const { seed, population } = controls.state;
+  const { seed, seed2, split, population } = controls.state;
   const rng = new Rng(seed);
   zoom = 1;
   world = new World(renderer.width, renderer.height, rng, reactor, renderer.measure);
-  world.populate(randomSoup(rng, population, reactor.cfg));
+  if (split) {
+    const left = randomSoup(rng, Math.floor(population / 2), reactor.cfg);
+    const right = randomSoup(new Rng(seed2), Math.ceil(population / 2), reactor.cfg);
+    world.populateSplit(left, right);
+  } else {
+    world.populate(randomSoup(rng, population, reactor.cfg));
+  }
+  controls.setWall(world.wall);
+  history.reset();
+  colors.reset();
+  lastColorUpdate = -Infinity;
   applyMode();
   drawer.reset();
 }
 
-/** Push mode/inflow into the world and the URL (applies live, no reset). */
+/** Push label style and coloring into the renderer and the URL. */
+function applyView(): void {
+  const { compact, colorFamilies } = controls.state;
+  colors.enabled = colorFamilies;
+  lastColorUpdate = -Infinity; // rank families right away
+  if (renderer.compact !== compact) {
+    renderer.compact = compact;
+    world.remeasure();
+    drawer.reset();
+  }
+  updateUrl();
+}
+
+/** Push mode, inflow, mixing and the binder limit into the world (applies live, no reset). */
 function applyMode(): void {
-  const { seed, mode, inflow, refillBy, conserve } = controls.state;
+  const { mode, inflow, refillBy, conserve, mixing, maxBinders } = controls.state;
   world.mode = mode;
   world.inflow = inflow;
   world.refillBy = refillBy;
   world.conserve = conserve;
+  world.mixing = mixing;
+  reactor.maxBinders = maxBinders > 0 ? maxBinders : Infinity;
+  applyView();
+}
+
+/** Keep the settings in the URL, so a link reproduces the setup. */
+function updateUrl(): void {
+  const { seed, seed2, split, mode, inflow, refillBy, conserve, mixing, maxBinders, compact, colorFamilies } =
+    controls.state;
   const url = new URL(location.href);
   url.searchParams.set("seed", seed);
   url.searchParams.delete("mode");
@@ -79,9 +140,15 @@ function applyMode(): void {
     if (!inflow) url.searchParams.set("inflow", "0");
     else if (refillBy === "mass") url.searchParams.set("refill", "mass");
   }
-  if (conserve) url.searchParams.set("conserve", "1");
-  else url.searchParams.delete("conserve");
-  history.replaceState(null, "", url);
+  const flag = (name: string, value: string | null) =>
+    value === null ? url.searchParams.delete(name) : url.searchParams.set(name, value);
+  flag("conserve", conserve ? "1" : null);
+  flag("split", split ? seed2 : null);
+  flag("mix", mixing !== 1 ? String(mixing) : null);
+  flag("binders", maxBinders > 0 ? String(maxBinders) : null);
+  flag("compact", compact ? "1" : null);
+  flag("color", colorFamilies ? "1" : null);
+  window.history.replaceState(null, "", url);
 }
 
 function updateZoom(dt: number): void {
@@ -100,6 +167,10 @@ function updateZoom(dt: number): void {
 const mouse = { x: -1, y: -1, vx: 0, vy: 0, down: false, t: 0, inside: false };
 
 canvas.addEventListener("pointerdown", (e) => {
+  if (e.shiftKey) {
+    dropAt(e.offsetX / zoom, e.offsetY / zoom);
+    return;
+  }
   mouse.down = true;
   mouse.vx = mouse.vy = 0;
   mouse.x = e.offsetX;
@@ -128,6 +199,19 @@ canvas.addEventListener("pointermove", (e) => {
   mouse.inside = true;
 });
 
+/** Shift-click: copies of the typed expression, or random molecules. */
+function dropAt(x: number, y: number): void {
+  const src = controls.dropExpression();
+  const { initMinSize, initMaxSize } = reactor.cfg;
+  // Parsed here, not stored: terms kept outside the soup would go stale
+  // when the intern table is garbage-collected.
+  const terms = Array.from({ length: DROP_COUNT }, () =>
+    src ? parse(src) : randomClosedTerm(dropRng, initMinSize, initMaxSize),
+  );
+  world.drop(terms, x, y);
+  renderer.flash(x, y, performance.now());
+}
+
 function updateTooltip(p: Particle | null): void {
   if (!p || mouse.down) {
     tooltip.hidden = true;
@@ -151,6 +235,7 @@ const events: ReactionEvent[] = [];
 let last = performance.now();
 let simAccum = 0;
 let lastAliveUpdate = -Infinity;
+let lastColorUpdate = -Infinity;
 
 function frame(now: number): void {
   const tStart = performance.now();
@@ -189,6 +274,7 @@ function frame(now: number): void {
 
   const tSim = performance.now();
   const hovered = mouse.inside && !mouse.down ? world.pick(mouse.x / zoom, mouse.y / zoom) : null;
+  sampleDiversity(now);
   renderer.draw(world, now, hovered, zoom, drawer.highlight);
   updateTooltip(hovered);
   drawer.tick(now);
@@ -198,6 +284,23 @@ function frame(now: number): void {
   }
   if (perf) perf.sample(tSim - tStart, performance.now() - tSim);
   requestAnimationFrame(frame);
+}
+
+/** Record species/family counts for the sparkline; re-rank family colors. */
+function sampleDiversity(now: number): void {
+  const sampleDue = history.due(world.time);
+  const colorDue = colors.enabled && now - lastColorUpdate >= COLOR_UPDATE_MS;
+  if (!sampleDue && !colorDue) return;
+  const species = world.speciesSummary();
+  const families = familySummary(species);
+  if (sampleDue) {
+    history.push({ t: world.time, species: species.length, families: families.length });
+    controls.setHistory(history.samples);
+  }
+  if (colorDue) {
+    colors.update(families);
+    lastColorUpdate = now;
+  }
 }
 
 // `?perf` logs average JS time per frame (simulation / drawing) every 3 s.

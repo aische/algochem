@@ -1,4 +1,4 @@
-import { type Term, mkApp, collectGarbage, internTableSize } from "../lambda/term";
+import { type Term, mkApp, collectGarbage, internTableSize, leadingBinders } from "../lambda/term";
 import { normalize, type ReduceLimits, DEFAULT_LIMITS } from "../lambda/reduce";
 import { randomClosedTerm } from "../lambda/random";
 import type { Rng } from "../rng";
@@ -23,6 +23,8 @@ export interface ReactorStats {
   products: number;
   failedLimit: number;
   blockedCopy: number;
+  /** Products refused for having more leading binders than `maxBinders`. */
+  blockedBinders: number;
 }
 
 const CACHE_LIMIT = 200_000;
@@ -33,7 +35,13 @@ const GC_THRESHOLD = 300_000;
  * reactant species, since organizations replay the same reactions constantly.
  */
 export class Reactor {
-  readonly stats: ReactorStats = { attempts: 0, products: 0, failedLimit: 0, blockedCopy: 0 };
+  readonly stats: ReactorStats = { attempts: 0, products: 0, failedLimit: 0, blockedCopy: 0, blockedBinders: 0 };
+  /**
+   * Optional filter: a product with more leading binders than this is
+   * refused (the reaction is elastic). Stops the unbounded growth of unused
+   * binders (`λxy.x` applied to T gives `λy.T`). Infinity = off.
+   */
+  maxBinders = Infinity;
   private cache = new Map<string, Term | null>();
 
   constructor(readonly cfg: ChemConfig = DEFAULT_CHEM) {}
@@ -54,6 +62,10 @@ export class Reactor {
     }
     if (product && blockCopies && (product === a || product === b)) {
       this.stats.blockedCopy++;
+      return null;
+    }
+    if (product && leadingBinders(product) > this.maxBinders) {
+      this.stats.blockedBinders++;
       return null;
     }
     if (product) this.stats.products++;

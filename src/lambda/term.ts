@@ -130,3 +130,13 @@ export function collectGarbage(roots: Iterable<Term>): void {
   for (const r of roots) visit(r);
   table = fresh;
 }
+
+/** Length of the term's leading run of binders: `λxyz.…` has 3. */
+export function leadingBinders(t: Term): number {
+  let n = 0;
+  while (t.tag === LAM) {
+    n++;
+    t = t.body;
+  }
+  return n;
+}

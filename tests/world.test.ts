@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { Reactor, randomSoup } from "../src/chem/soup";
 import { World, DEFAULT_WORLD, type ReactionMode, type ReactionEvent } from "../src/physics/world";
 import { Rng } from "../src/rng";
+import { parse } from "../src/lambda/parse";
 
 // Fixed-size boxes keep the test independent of fonts.
 const measure = () => ({ w: 60, h: 16 });
@@ -161,5 +162,103 @@ describe("Inflow refill by mass", () => {
     }
     // Inflow turns spare free mass back into molecules: pool settles near its start.
     expect(w.pool).toBeLessThan(start * 0.3);
+  });
+});
+
+describe("Split soup with a wall", () => {
+  function split() {
+    const rng = new Rng(4);
+    const w = new World(900, 600, rng, new Reactor(), measure);
+    w.populateSplit(randomSoup(rng, 150), randomSoup(new Rng(5), 150));
+    return w;
+  }
+  const sides = (w: World) => new Map(w.particles.map((p) => [p, p.x < w.width / 2]));
+
+  it("keeps every molecule's box on its own side", () => {
+    const w = split();
+    expect(w.wall).toBe(true);
+    const start = sides(w);
+    expect([...start.values()].filter(Boolean).length).toBe(150);
+    const reactions = run(w, 1500);
+    expect(reactions).toBeGreaterThan(50);
+    const half = w.width / 2;
+    for (const p of w.particles) {
+      if (start.has(p)) expect(p.x < half).toBe(start.get(p));
+      const left = p.x < half;
+      expect(p.x - p.w / 2).toBeGreaterThanOrEqual(left ? 0 : half);
+      expect(p.x + p.w / 2).toBeLessThanOrEqual(left ? half : w.width);
+    }
+  });
+
+  it("lets the halves mix once the wall is removed", () => {
+    const w = split();
+    const crossings = () => {
+      let n = 0;
+      const events: ReactionEvent[] = [];
+      for (let i = 0; i < 600; i++) {
+        const before = sides(w);
+        w.step(1 / 60, events);
+        for (const [p, left] of before) if (p.dying < 0 && p.x < w.width / 2 !== left) n++;
+      }
+      return n;
+    };
+    expect(crossings()).toBe(0);
+    w.wall = false;
+    expect(crossings()).toBeGreaterThan(5);
+  });
+});
+
+describe("Dropping molecules", () => {
+  it("catalytic: drops displace molecules, so the count holds", () => {
+    const w = makeWorld("catalytic", false);
+    const added = w.drop(randomSoup(new Rng(2), 10), 450, 300);
+    expect(added).toBe(10);
+    expect(w.aliveCount()).toBe(300);
+    expect(w.particles.length).toBe(310); // 10 displaced ones are fading out
+  });
+
+  it("consumptive: drops add to the soup", () => {
+    const w = makeWorld("consumptive", false);
+    w.drop(randomSoup(new Rng(2), 10), 450, 300);
+    expect(w.aliveCount()).toBe(310);
+  });
+
+  it("are paid for from the pool when mass is conserved", () => {
+    const w = makeWorld("consumptive", false);
+    w.conserve = true;
+    const start = w.soupMass() + w.pool;
+    w.pool = 20;
+    const before = w.soupMass();
+    const added = w.drop(Array.from({ length: 10 }, () => parse("λxyz.x z (y z)")), 450, 300); // 10 nodes each
+    expect(added).toBe(2);
+    expect(w.soupMass() - before).toBe(20);
+    expect(w.pool).toBe(0);
+    expect(start).toBeGreaterThan(0);
+  });
+});
+
+describe("Mixing", () => {
+  it("scales the molecules' speed", () => {
+    const speed = (mixing: number) => {
+      const w = makeWorld("catalytic", false, 100);
+      w.mixing = mixing;
+      run(w, 600); // settle into the new thermal speed
+      return w.particles.reduce((s, p) => s + Math.hypot(p.vx, p.vy), 0) / w.particles.length;
+    };
+    const ratio = speed(4) / speed(1);
+    expect(ratio).toBeGreaterThan(3);
+    expect(ratio).toBeLessThan(5);
+  });
+});
+
+describe("Leading-binder limit", () => {
+  it("refuses products with too many leading binders", () => {
+    const r = new Reactor();
+    const k = parse("λxy.x");
+    const k3 = parse("λxyz.x");
+    expect(r.react(k, k3)).toBe(parse("λxyzu.y")); // 4 leading binders
+    r.maxBinders = 3;
+    expect(r.react(k, k3)).toBeNull();
+    expect(r.stats.blockedBinders).toBe(1);
   });
 });

@@ -591,3 +591,76 @@ body.drawer-open .panel {
 .help-body a {
   color: var(--accent);
 }
+
+/* --- Diversity sparkline, split, drop, families -------------------------- */
+
+.panel {
+  max-height: calc(100vh - 28px);
+  overflow-y: auto;
+}
+
+.panel .spark {
+  display: block;
+  width: 100%;
+  height: 34px;
+  cursor: crosshair;
+}
+
+.panel .spark-text {
+  color: var(--fg);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.panel .spark-text i {
+  display: inline-block;
+  width: 8px;
+  height: 2px;
+  margin: 0 4px 2px 0;
+  border-radius: 1px;
+  vertical-align: middle;
+}
+
+.panel .spark-text i:not(:first-child) {
+  margin-left: 6px;
+}
+
+.panel .spark-text .when {
+  color: var(--dim);
+}
+
+.panel .row.disabled {
+  opacity: 0.4;
+}
+
+.panel input[type="text"]:disabled {
+  cursor: default;
+}
+
+.panel input[type="text"].invalid {
+  border-color: rgba(255, 120, 100, 0.7);
+}
+
+.panel input[type="text"]::placeholder {
+  color: var(--dim);
+  opacity: 0.6;
+}
+
+.panel button[hidden] {
+  display: none;
+}
+
+.species-list .sw {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  margin-right: 6px;
+  border-radius: 50%;
+  vertical-align: 1px;
+  background: transparent;
+}
+
+.panel .row input[type="text"] + button {
+  flex: 0 0 auto;
+}

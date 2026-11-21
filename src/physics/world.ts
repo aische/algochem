@@ -127,6 +127,18 @@ export class World {
   /** Sim time at which each live species (term id) first appeared. */
   private firstSeen = new Map<number, number>();
   stir: Stir | null = null;
+  /**
+   * Multiplies the Brownian kick. Molecules move `mixing` times faster and
+   * spread `mixing²` times faster: low values let separate regions evolve
+   * their own organizations, high values approach a well-mixed soup.
+   */
+  mixing = 1;
+  /**
+   * A wall down the middle (x = width/2) and at the x = 0 seam splits the
+   * soup into two halves that cannot meet: no molecule crosses, nothing
+   * collides across, and dilution stays on its own side.
+   */
+  wall = false;
 
   // Toroidal broad-phase grid. Cell sizes divide the world exactly so cell
   // indices wrap the same way positions do.
@@ -146,15 +158,75 @@ export class World {
   ) {}
 
   populate(terms: Term[]): void {
-    this.target = terms.length;
-    const mass = terms.reduce((m, t) => m + t.size, 0);
-    this.targetMass = mass;
-    this.pool = Math.round(mass * this.cfg.initialPoolFraction);
+    this.wall = false;
+    this.setInitial(terms);
     this.particles = terms.map((term) => {
       const p = this.spawnRandomly(term);
       p.age = 10; // initial molecules appear without fading in
       return p;
     });
+  }
+
+  /** Two soups side by side, `left` and `right`, with the wall up between them. */
+  populateSplit(left: Term[], right: Term[]): void {
+    this.setInitial([...left, ...right]);
+    this.wall = true;
+    const half = this.width / 2;
+    const place = (term: Term, x0: number): Particle => {
+      const p = this.spawnRandomly(term);
+      p.x = x0 + this.rng.next() * half;
+      p.age = 10;
+      this.confine(p, x0 === 0);
+      return p;
+    };
+    this.particles = [...left.map((t) => place(t, 0)), ...right.map((t) => place(t, half))];
+  }
+
+  private setInitial(terms: Term[]): void {
+    this.target = terms.length;
+    const mass = terms.reduce((m, t) => m + t.size, 0);
+    this.targetMass = mass;
+    this.pool = Math.round(mass * this.cfg.initialPoolFraction);
+  }
+
+  /**
+   * Add molecules around (x, y). Catalytic mode keeps the count: each one
+   * displaces a nearby molecule, like a product does. With conservation on,
+   * each is paid for from the pool; dropping stops when the pool runs dry.
+   * Returns how many were added.
+   */
+  drop(terms: Term[], x: number, y: number): number {
+    const added: Particle[] = [];
+    for (const term of terms) {
+      const px = mod(x + this.rng.gauss() * 30, this.width);
+      const py = mod(y + this.rng.gauss() * 20, this.height);
+      const victim = this.mode === "catalytic" ? this.pickNear(px, py) : null;
+      if (this.conserve) {
+        const cost = term.size - (victim ? victim.term.size : 0);
+        if (cost > this.pool) break;
+        this.pool -= cost;
+      }
+      if (victim) victim.dying = 0;
+      const p = this.spawn(term, px, py);
+      const speed = this.thermalSpeed();
+      p.vx = this.rng.gauss() * speed;
+      p.vy = this.rng.gauss() * speed;
+      p.product = true; // glows like a fresh product
+      p.cooldown = this.cfg.cooldown;
+      if (this.wall) this.confine(p, px < this.width / 2);
+      added.push(p);
+    }
+    for (const p of added) this.particles.push(p);
+    return added.length;
+  }
+
+  /** Recompute every label box, e.g. after the label style changed. */
+  remeasure(): void {
+    for (const p of this.particles) {
+      const { w, h } = this.measure(p.term);
+      p.w = w;
+      p.h = h;
+    }
   }
 
   /** 0..1 progress of a dissolving or merging molecule. */
@@ -251,10 +323,34 @@ export class World {
   /** New molecule at a random position with a thermal velocity. */
   private spawnRandomly(term: Term): Particle {
     const p = this.spawn(term, this.rng.next() * this.width, this.rng.next() * this.height);
-    const speed = this.cfg.brownian / Math.sqrt(2 * this.cfg.damping);
+    if (this.wall) this.confine(p, p.x < this.width / 2);
+    const speed = this.thermalSpeed();
     p.vx = this.rng.gauss() * speed;
     p.vy = this.rng.gauss() * speed;
     return p;
+  }
+
+  /** Typical speed (px/s per axis) of a molecule at the current mixing. */
+  private thermalSpeed(): number {
+    return (this.cfg.brownian * this.mixing) / Math.sqrt(2 * this.cfg.damping);
+  }
+
+  /**
+   * Keep a molecule's whole box inside its half while the wall is up, so it
+   * can neither cross nor touch a molecule on the other side.
+   */
+  private confine(p: Particle, left: boolean): void {
+    const half = this.width / 2;
+    const lo = left ? 0 : half;
+    const hi = left ? half : this.width;
+    const m = Math.min(p.w / 2, half / 2);
+    if (p.x < lo + m) {
+      p.x = lo + m;
+      p.vx = Math.abs(p.vx);
+    } else if (p.x > hi - m) {
+      p.x = hi - m;
+      p.vx = -Math.abs(p.vx);
+    }
   }
 
   /**
@@ -285,7 +381,9 @@ export class World {
 
   private integrate(dt: number): void {
     const { brownian, damping } = this.cfg;
-    const kick = brownian * Math.sqrt(dt);
+    const kick = brownian * this.mixing * Math.sqrt(dt);
+    const wall = this.wall;
+    const half = this.width / 2;
     const decay = Math.exp(-damping * dt);
     const s = this.stir;
     const W = this.width;
@@ -318,8 +416,10 @@ export class World {
         }
       }
 
+      const left = p.x < half;
       p.x += p.vx * dt;
       p.y += p.vy * dt;
+      if (wall) this.confine(p, left);
       if (p.x < 0) p.x += W;
       else if (p.x >= W) p.x -= W;
       if (p.y < 0) p.y += H;
@@ -408,6 +508,9 @@ export class World {
   }
 
   private separate(a: Particle, b: Particle, dx: number, dy: number, ox: number, oy: number): void {
+    const half = this.width / 2;
+    const aLeft = a.x < half;
+    const bLeft = b.x < half;
     // Compare overlap relative to box extent so wide labels also get pushed sideways.
     if (ox / (a.w + b.w) < oy / (a.h + b.h)) {
       const s = dx >= 0 ? 1 : -1;
@@ -427,6 +530,10 @@ export class World {
         a.vy = b.vy;
         b.vy = t;
       }
+    }
+    if (this.wall) {
+      this.confine(a, aLeft);
+      this.confine(b, bLeft);
     }
     this.wrap(a);
     this.wrap(b);
@@ -478,7 +585,7 @@ export class World {
     }
     const p = this.spawn(product, px, py);
     p.product = true;
-    const jitter = this.cfg.brownian;
+    const jitter = this.cfg.brownian * this.mixing;
     p.vx = (a.vx + b.vx) / 2 + this.rng.gauss() * jitter;
     p.vy = (a.vy + b.vy) / 2 + this.rng.gauss() * jitter;
     p.cooldown = this.cfg.cooldown * 2;
@@ -498,8 +605,11 @@ export class World {
     const H = this.height;
     let victim: Particle | null = null;
     let seen = 0;
+    // With the wall up, only molecules on the same side qualify.
+    const half = W / 2;
+    const side = (q: Particle) => !this.wall || q.x < half === x < half;
     for (const q of ps) {
-      if (q.dying >= 0) continue;
+      if (q.dying >= 0 || !side(q)) continue;
       let dx = Math.abs(q.x - x);
       let dy = Math.abs(q.y - y);
       dx = Math.min(dx, W - dx);
@@ -510,7 +620,7 @@ export class World {
     }
     for (let tries = 0; !victim && tries < 32; tries++) {
       const q = ps[this.rng.int(0, ps.length - 1)];
-      if (q.dying < 0) victim = q;
+      if (q.dying < 0 && side(q)) victim = q;
     }
     return victim;
   }

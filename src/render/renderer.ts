@@ -1,5 +1,5 @@
 import type { Term } from "../lambda/term";
-import { print, truncate } from "../lambda/print";
+import { print, printCompact, truncate } from "../lambda/print";
 import type { World, Particle } from "../physics/world";
 
 const FONT_SIZE = 11;
@@ -14,6 +14,21 @@ const FADE_IN = 0.35;
 const FLASH_MS = 450;
 const SPRITE_CACHE_MAX = 4000;
 const DIM_ALPHA = 0.2; // other species while one is highlighted
+
+/**
+ * Label colors for "color by family": the top families in the soup get these
+ * hues in order, the rest are drawn in OTHER_COLOR. Checked all-pairs against
+ * the background for normal vision and color blindness; the label text itself
+ * identifies each molecule, so color is never the only cue.
+ */
+export const FAMILY_COLORS = ["#5aa9ff", "#ff8a3d", "#3fd0a0", "#ffd84a", "#e07ad8"];
+export const OTHER_COLOR = "rgba(214, 222, 235, 0.42)";
+/** Color slot of a molecule: -1 plain text, 0..4 a family hue, 5 another family. */
+export const PLAIN = -1;
+export const OTHER = FAMILY_COLORS.length;
+
+/** Which molecules to light up (the rest are dimmed). */
+export type Highlight = (t: Term) => boolean;
 
 interface Sprite {
   canvas: HTMLCanvasElement;
@@ -32,6 +47,10 @@ export class Renderer {
   private ctx: CanvasRenderingContext2D;
   private dpr = 1;
   private sprites = new Map<number, Sprite>();
+  /** Show labels in compact form (unused binders as `_`). Call world.remeasure() after changing. */
+  compact = false;
+  /** Color slot per molecule (see PLAIN / OTHER / FAMILY_COLORS). */
+  colorSlot: (t: Term) => number = () => PLAIN;
   private measureCtx: CanvasRenderingContext2D;
   private flashSprite: HTMLCanvasElement;
   private haloSprite: HTMLCanvasElement;
@@ -61,7 +80,7 @@ export class Renderer {
 
   /** On-screen box size of a molecule, in CSS px. */
   measure = (t: Term): { w: number; h: number } => {
-    const s = this.sprite(t);
+    const s = this.sprite(t, PLAIN);
     return { w: s.w, h: s.h };
   };
 
@@ -71,9 +90,9 @@ export class Renderer {
 
   /**
    * Draw the world; `zoom` < 1 shows more world per screen pixel. When
-   * `highlight` is a species id, that species is lit and the rest dimmed.
+   * `highlight` is set, the molecules it selects are lit and the rest dimmed.
    */
-  draw(world: World, now: number, hovered: Particle | null, zoom = 1, highlight: number | null = null): void {
+  draw(world: World, now: number, hovered: Particle | null, zoom = 1, highlight: Highlight | null = null): void {
     this.frame++;
     const { ctx, dpr } = this;
     const W = world.width;
@@ -85,10 +104,24 @@ export class Renderer {
     ctx.fillStyle = BG;
     ctx.fillRect(0, 0, W, H);
 
+    if (world.wall) {
+      // The middle wall, and the one at the x = 0 seam (screen edges).
+      ctx.strokeStyle = "rgba(120, 220, 255, 0.28)";
+      ctx.lineWidth = 1.5 / zoom;
+      ctx.setLineDash([6 / zoom, 6 / zoom]);
+      ctx.beginPath();
+      for (const x of [W / 2, 1 / zoom, W - 1 / zoom]) {
+        ctx.moveTo(x, 0);
+        ctx.lineTo(x, H);
+      }
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+
     // Halos behind freshly made products (additive, stretched to the label).
     ctx.globalCompositeOperation = "lighter";
     for (const p of world.particles) {
-      if (highlight !== null && p.term.id === highlight && p.dying < 0) {
+      if (highlight !== null && p.dying < 0 && highlight(p.term)) {
         ctx.globalAlpha = 0.5;
         ctx.drawImage(this.haloSprite, p.x - p.w / 2 - 22, p.y - p.h / 2 - 14, p.w + 44, p.h + 28);
         continue;
@@ -104,7 +137,7 @@ export class Renderer {
 
     // Molecules.
     for (const p of world.particles) {
-      const s = this.sprite(p.term);
+      const s = this.sprite(p.term, this.colorSlot(p.term));
       let alpha = 1;
       let scale = 1;
       if (p.dying >= 0) {
@@ -112,7 +145,7 @@ export class Renderer {
         alpha = 1 - t;
         if (p.merge) scale = 1 - 0.6 * t; // consumed reactants shrink into the product
       } else if (p.age < FADE_IN) alpha = p.age / FADE_IN;
-      if (highlight !== null) alpha = p.term.id === highlight ? alpha : alpha * DIM_ALPHA;
+      if (highlight !== null) alpha = highlight(p.term) ? alpha : alpha * DIM_ALPHA;
       ctx.globalAlpha = p === hovered ? 1 : alpha;
       this.blitWrapped(s, p.x, p.y, W, H, scale);
     }
@@ -160,10 +193,12 @@ export class Renderer {
     if (wrapX && wrapY) ctx.drawImage(s.canvas, left + wrapX, top + wrapY, w, h);
   }
 
-  private sprite(t: Term): Sprite {
-    let s = this.sprites.get(t.id);
+  private sprite(t: Term, slot: number): Sprite {
+    // One sprite per species, label style and color.
+    const key = t.id * 16 + (this.compact ? 8 : 0) + (slot + 1);
+    let s = this.sprites.get(key);
     if (!s) {
-      const text = truncate(print(t), MAX_CHARS);
+      const text = truncate(this.compact ? printCompact(t) : print(t), MAX_CHARS);
       const w = Math.ceil(this.measureCtx.measureText(text).width) + PAD_X * 2;
       const h = Math.ceil(FONT_SIZE * 1.3) + PAD_Y * 2;
       const canvas = document.createElement("canvas");
@@ -173,10 +208,10 @@ export class Renderer {
       c.scale(this.dpr, this.dpr);
       c.font = FONT;
       c.textBaseline = "middle";
-      c.fillStyle = TEXT_COLOR;
+      c.fillStyle = slot === PLAIN ? TEXT_COLOR : slot === OTHER ? OTHER_COLOR : FAMILY_COLORS[slot];
       c.fillText(text, PAD_X, h / 2 + 0.5);
       s = { canvas, w, h, lastUsed: this.frame };
-      this.sprites.set(t.id, s);
+      this.sprites.set(key, s);
     }
     s.lastUsed = this.frame;
     return s;
