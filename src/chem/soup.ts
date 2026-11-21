@@ -38,8 +38,12 @@ export class Reactor {
 
   constructor(readonly cfg: ChemConfig = DEFAULT_CHEM) {}
 
-  /** Product of applying `a` to `b`, or null if the reaction is elastic. */
-  react(a: Term, b: Term): Term | null {
+  /**
+   * Product of applying `a` to `b`, or null if the reaction is elastic.
+   * `blockCopies` overrides the config: copy reactions (product equals a
+   * reactant) only need blocking when reactants survive the reaction.
+   */
+  react(a: Term, b: Term, blockCopies = this.cfg.blockCopies): Term | null {
     this.stats.attempts++;
     const key = a.id + ":" + b.id;
     let product = this.cache.get(key);
@@ -48,10 +52,15 @@ export class Reactor {
       if (this.cache.size >= CACHE_LIMIT) this.cache.clear();
       this.cache.set(key, product);
     }
+    if (product && blockCopies && (product === a || product === b)) {
+      this.stats.blockedCopy++;
+      return null;
+    }
     if (product) this.stats.products++;
     return product;
   }
 
+  /** Normal form of (a b), or null if it hits a reduction limit. Unfiltered. */
   private compute(a: Term, b: Term): Term | null {
     const r = normalize(mkApp(a, b), this.cfg.limits);
     if (!r.ok) {
@@ -59,10 +68,6 @@ export class Reactor {
       return null;
     }
     if (r.term.free !== 0) return null; // cannot happen for closed reactants
-    if (this.cfg.blockCopies && (r.term === a || r.term === b)) {
-      this.stats.blockedCopy++;
-      return null;
-    }
     return r.term;
   }
 

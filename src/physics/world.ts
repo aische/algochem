@@ -1,6 +1,15 @@
 import type { Term } from "../lambda/term";
 import type { Reactor } from "../chem/soup";
+import { randomClosedTerm } from "../lambda/random";
 import type { Rng } from "../rng";
+
+/**
+ * catalytic:   A + B → A + B + C, then a nearby molecule is diluted away
+ *              (classic AlChemy; population constant).
+ * consumptive: A + B → C; both reactants are used up. With inflow, fresh
+ *              random molecules top the soup back up; without, it shrinks.
+ */
+export type ReactionMode = "catalytic" | "consumptive";
 
 export interface Particle {
   term: Term;
@@ -16,6 +25,10 @@ export interface Particle {
   age: number;
   /** -1 while alive; otherwise seconds since it started dissolving. */
   dying: number;
+  /** Reaction product (glows when new), as opposed to initial or inflow. */
+  product: boolean;
+  /** Consumed reactant: where it is being drawn into (in its own frame). */
+  merge: { x: number; y: number } | null;
 }
 
 export interface WorldConfig {
@@ -33,6 +46,10 @@ export interface WorldConfig {
   dissolveTime: number;
   /** Radius within which a reaction's product displaces a molecule (px). */
   dilutionRadius: number;
+  /** Seconds a consumed reactant takes to merge into its product. */
+  mergeTime: number;
+  /** Max fresh molecules added per step while inflow refills the soup. */
+  inflowPerStep: number;
   /** Broad-phase grid cell size (px). Wide, short cells suit text labels. */
   cellW: number;
   cellH: number;
@@ -46,6 +63,8 @@ export const DEFAULT_WORLD: WorldConfig = {
   reactionBudget: 20,
   dissolveTime: 0.25,
   dilutionRadius: 120,
+  mergeTime: 0.35,
+  inflowPerStep: 2,
   cellW: 128,
   cellH: 32,
 };
@@ -78,6 +97,11 @@ export class World {
   particles: Particle[] = [];
   /** Simulated seconds since the world was created. */
   time = 0;
+  mode: ReactionMode = "catalytic";
+  /** Consumptive mode only: refill the soup to `target` with random molecules. */
+  inflow = true;
+  /** Population inflow refills to (the initial size). */
+  target = 0;
   /** Sim time at which each live species (term id) first appeared. */
   private firstSeen = new Map<number, number>();
   stir: Stir | null = null;
@@ -100,14 +124,18 @@ export class World {
   ) {}
 
   populate(terms: Term[]): void {
-    const speed = this.cfg.brownian / Math.sqrt(2 * this.cfg.damping);
+    this.target = terms.length;
     this.particles = terms.map((term) => {
-      const p = this.spawn(term, this.rng.next() * this.width, this.rng.next() * this.height);
-      p.vx = this.rng.gauss() * speed;
-      p.vy = this.rng.gauss() * speed;
-      p.age = 10; // initial molecules do not glow
+      const p = this.spawnRandomly(term);
+      p.age = 10; // initial molecules appear without fading in
       return p;
     });
+  }
+
+  /** 0..1 progress of a dissolving or merging molecule. */
+  dyingProgress(p: Particle): number {
+    if (p.dying < 0) return 0;
+    return Math.min(1, p.dying / (p.merge ? this.cfg.mergeTime : this.cfg.dissolveTime));
   }
 
   /** Change the world size, scaling positions so the soup expands/contracts. */
@@ -173,6 +201,7 @@ export class World {
     this.time += dt;
     this.integrate(dt);
     this.collide(events);
+    if (this.mode === "consumptive" && this.inflow) this.flowIn();
     this.reap(dt);
   }
 
@@ -184,7 +213,25 @@ export class World {
       if (this.firstSeen.size > 8 * this.particles.length + 1000) this.speciesSummary(); // prune
     }
     const { w, h } = this.measure(term);
-    return { term, x, y, vx: 0, vy: 0, w, h, cooldown: 0, age: 0, dying: -1 };
+    return { term, x, y, vx: 0, vy: 0, w, h, cooldown: 0, age: 0, dying: -1, product: false, merge: null };
+  }
+
+  /** New molecule at a random position with a thermal velocity. */
+  private spawnRandomly(term: Term): Particle {
+    const p = this.spawn(term, this.rng.next() * this.width, this.rng.next() * this.height);
+    const speed = this.cfg.brownian / Math.sqrt(2 * this.cfg.damping);
+    p.vx = this.rng.gauss() * speed;
+    p.vy = this.rng.gauss() * speed;
+    return p;
+  }
+
+  /** Top the soup back up towards `target` with fresh random molecules. */
+  private flowIn(): void {
+    const missing = Math.min(this.target - this.aliveCount(), this.cfg.inflowPerStep);
+    const { initMinSize, initMaxSize } = this.reactor.cfg;
+    for (let i = 0; i < missing; i++) {
+      this.particles.push(this.spawnRandomly(randomClosedTerm(this.rng, initMinSize, initMaxSize)));
+    }
   }
 
   private integrate(dt: number): void {
@@ -198,7 +245,15 @@ export class World {
     for (const p of this.particles) {
       p.age += dt;
       if (p.cooldown > 0) p.cooldown -= dt;
-      if (p.dying >= 0) continue;
+      if (p.dying >= 0) {
+        if (p.merge) {
+          // Drawn into the collision point while it shrinks away.
+          const k = Math.min(1, 14 * dt);
+          p.x += (p.merge.x - p.x) * k;
+          p.y += (p.merge.y - p.y) * k;
+        }
+        continue;
+      }
 
       p.vx = p.vx * decay + this.rng.gauss() * kick;
       p.vy = p.vy * decay + this.rng.gauss() * kick;
@@ -289,7 +344,7 @@ export class World {
             a.cooldown = b.cooldown = this.cfg.cooldown;
             if (this.rng.chance(this.cfg.pReact)) {
               budget--;
-              const p = this.tryReact(a, b, a.x + dx / 2, a.y + dy / 2);
+              const p = this.tryReact(a, b, dx, dy);
               if (p) {
                 products.push(p);
                 events.push({ x: p.x, y: p.y, product: p });
@@ -302,7 +357,7 @@ export class World {
 
     for (const p of products) {
       ps.push(p);
-      this.dilute(p);
+      if (this.mode === "catalytic") this.dilute(p);
     }
   }
 
@@ -338,11 +393,23 @@ export class World {
     else if (p.y >= this.height) p.y -= this.height;
   }
 
-  private tryReact(a: Particle, b: Particle, mx: number, my: number): Particle | null {
+  /** (dx, dy): b's position relative to a, minimum image. */
+  private tryReact(a: Particle, b: Particle, dx: number, dy: number): Particle | null {
     const [f, x] = this.rng.chance(0.5) ? [a, b] : [b, a];
-    const product = this.reactor.react(f.term, x.term);
+    const consumptive = this.mode === "consumptive";
+    // Copies are harmless when reactants are consumed (A + B → B just removes A).
+    const product = this.reactor.react(f.term, x.term, consumptive ? false : undefined);
     if (!product) return null;
+    const mx = a.x + dx / 2;
+    const my = a.y + dy / 2;
+    if (consumptive) {
+      // Both reactants are used up and drift into the collision point.
+      a.dying = b.dying = 0;
+      a.merge = { x: mx, y: my };
+      b.merge = { x: b.x - dx / 2, y: b.y - dy / 2 };
+    }
     const p = this.spawn(product, mod(mx, this.width), mod(my, this.height));
+    p.product = true;
     const jitter = this.cfg.brownian;
     p.vx = (a.vx + b.vx) / 2 + this.rng.gauss() * jitter;
     p.vy = (a.vy + b.vy) / 2 + this.rng.gauss() * jitter;
@@ -385,7 +452,7 @@ export class World {
       const p = ps[i];
       if (p.dying < 0) continue;
       p.dying += dt;
-      if (p.dying >= this.cfg.dissolveTime) {
+      if (this.dyingProgress(p) >= 1) {
         ps[i] = ps[ps.length - 1];
         ps.pop();
       }

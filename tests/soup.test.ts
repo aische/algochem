@@ -20,6 +20,14 @@ describe("Reactor", () => {
     expect(r.stats.blockedCopy).toBe(1);
   });
 
+  it("can allow copy reactions per call", () => {
+    const r = new Reactor();
+    const i = parse("λx.x");
+    const k = parse("λx y.x");
+    expect(r.react(i, k, false)).toBe(k);
+    expect(r.react(i, k)).toBeNull(); // cached result, filter still applied
+  });
+
   it("treats non-terminating reactions as elastic", () => {
     const r = new Reactor();
     const w = parse("λx.x x");

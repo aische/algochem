@@ -228,14 +228,14 @@ body.drawer-open .panel {
   color: var(--dim);
 }
 
-.drawer .seg {
+.seg {
   display: flex;
   border: 1px solid rgba(255, 255, 255, 0.1);
   border-radius: 6px;
   overflow: hidden;
 }
 
-.drawer .seg button {
+.seg button {
   flex: 1;
   font: inherit;
   color: var(--dim);
@@ -245,11 +245,11 @@ body.drawer-open .panel {
   cursor: pointer;
 }
 
-.drawer .seg button + button {
+.seg button + button {
   border-left: 1px solid rgba(255, 255, 255, 0.1);
 }
 
-.drawer .seg button.on {
+.seg button.on {
   color: var(--fg);
   background: rgba(255, 255, 255, 0.1);
 }
@@ -324,4 +324,63 @@ body.drawer-open .panel {
   background: rgba(14, 18, 28, 0.94);
   border: 1px solid rgba(120, 220, 255, 0.35);
   border-radius: 8px;
+}
+
+/* --- Mode controls ------------------------------------------------------- */
+
+.panel .field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.panel .field-label {
+  color: var(--dim);
+}
+
+.panel .seg button {
+  flex: 1;
+  font: inherit;
+  color: var(--dim);
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  padding: 5px 4px;
+}
+
+.panel .seg button.on {
+  color: var(--fg);
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.panel .mode-desc {
+  color: var(--fg);
+  font-size: 10px;
+  opacity: 0.75;
+}
+
+.panel label.check {
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+}
+
+.panel label.check input {
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+.panel label.check.disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.panel .alive {
+  color: var(--dim);
+}
+
+.panel .alive span {
+  color: var(--fg);
+  font-variant-numeric: tabular-nums;
 }

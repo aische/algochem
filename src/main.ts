@@ -33,8 +33,10 @@ const controls = new Controls(
     speed: 1,
     seed: params.get("seed") ?? randomSeed(),
     population: clamp(Number(params.get("n")) || 600, 300, 1000),
+    mode: params.get("mode") === "consumptive" ? "consumptive" : "catalytic",
+    inflow: params.get("inflow") !== "0",
   },
-  { onReset: reset, onToggleSpecies: () => drawer.toggle() },
+  { onReset: reset, onToggleSpecies: () => drawer.toggle(), onModeChange: applyMode },
 );
 
 let world: World;
@@ -47,10 +49,26 @@ function reset(): void {
   zoom = 1;
   world = new World(renderer.width, renderer.height, rng, reactor, renderer.measure);
   world.populate(randomSoup(rng, population, reactor.cfg));
+  applyMode();
+  drawer.reset();
+}
+
+/** Push mode/inflow into the world and the URL (applies live, no reset). */
+function applyMode(): void {
+  const { seed, mode, inflow } = controls.state;
+  world.mode = mode;
+  world.inflow = inflow;
   const url = new URL(location.href);
   url.searchParams.set("seed", seed);
+  if (mode === "consumptive") {
+    url.searchParams.set("mode", mode);
+    if (inflow) url.searchParams.delete("inflow");
+    else url.searchParams.set("inflow", "0");
+  } else {
+    url.searchParams.delete("mode");
+    url.searchParams.delete("inflow");
+  }
   history.replaceState(null, "", url);
-  drawer.reset();
 }
 
 function updateZoom(dt: number): void {
@@ -119,6 +137,7 @@ function updateTooltip(p: Particle | null): void {
 const events: ReactionEvent[] = [];
 let last = performance.now();
 let simAccum = 0;
+let lastAliveUpdate = -Infinity;
 
 function frame(now: number): void {
   const tStart = performance.now();
@@ -160,6 +179,10 @@ function frame(now: number): void {
   renderer.draw(world, now, hovered, zoom, drawer.highlight);
   updateTooltip(hovered);
   drawer.tick(now);
+  if (now - lastAliveUpdate > 250) {
+    controls.setAlive(world.aliveCount());
+    lastAliveUpdate = now;
+  }
   if (perf) perf.sample(tSim - tStart, performance.now() - tSim);
   requestAnimationFrame(frame);
 }

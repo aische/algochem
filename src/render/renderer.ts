@@ -93,7 +93,7 @@ export class Renderer {
         ctx.drawImage(this.haloSprite, p.x - p.w / 2 - 22, p.y - p.h / 2 - 14, p.w + 44, p.h + 28);
         continue;
       }
-      if (p.dying >= 0 || p.age >= GLOW_TIME) continue;
+      if (p.dying >= 0 || !p.product || p.age >= GLOW_TIME) continue;
       const k = 1 - p.age / GLOW_TIME;
       ctx.globalAlpha = 0.55 * k * k;
       const padX = 18;
@@ -106,11 +106,15 @@ export class Renderer {
     for (const p of world.particles) {
       const s = this.sprite(p.term);
       let alpha = 1;
-      if (p.dying >= 0) alpha = Math.max(0, 1 - p.dying / world.cfg.dissolveTime);
-      else if (p.age < FADE_IN) alpha = p.age / FADE_IN;
-      if (highlight !== null) alpha = p.term.id === highlight ? 1 : alpha * DIM_ALPHA;
+      let scale = 1;
+      if (p.dying >= 0) {
+        const t = world.dyingProgress(p);
+        alpha = 1 - t;
+        if (p.merge) scale = 1 - 0.6 * t; // consumed reactants shrink into the product
+      } else if (p.age < FADE_IN) alpha = p.age / FADE_IN;
+      if (highlight !== null) alpha = p.term.id === highlight ? alpha : alpha * DIM_ALPHA;
       ctx.globalAlpha = p === hovered ? 1 : alpha;
-      this.blitWrapped(s, p.x, p.y, W, H);
+      this.blitWrapped(s, p.x, p.y, W, H, scale);
     }
 
     if (hovered) {
@@ -142,16 +146,18 @@ export class Renderer {
   // -------------------------------------------------------------------------
 
   /** Draw a sprite centered at (x, y), duplicating it across wrapped edges. */
-  private blitWrapped(s: Sprite, x: number, y: number, W: number, H: number): void {
+  private blitWrapped(s: Sprite, x: number, y: number, W: number, H: number, scale = 1): void {
     const ctx = this.ctx;
-    const left = x - s.w / 2;
-    const top = y - s.h / 2;
-    ctx.drawImage(s.canvas, left, top, s.w, s.h);
-    const wrapX = left < 0 ? W : left + s.w > W ? -W : 0;
-    const wrapY = top < 0 ? H : top + s.h > H ? -H : 0;
-    if (wrapX) ctx.drawImage(s.canvas, left + wrapX, top, s.w, s.h);
-    if (wrapY) ctx.drawImage(s.canvas, left, top + wrapY, s.w, s.h);
-    if (wrapX && wrapY) ctx.drawImage(s.canvas, left + wrapX, top + wrapY, s.w, s.h);
+    const w = s.w * scale;
+    const h = s.h * scale;
+    const left = x - w / 2;
+    const top = y - h / 2;
+    ctx.drawImage(s.canvas, left, top, w, h);
+    const wrapX = left < 0 ? W : left + w > W ? -W : 0;
+    const wrapY = top < 0 ? H : top + h > H ? -H : 0;
+    if (wrapX) ctx.drawImage(s.canvas, left + wrapX, top, w, h);
+    if (wrapY) ctx.drawImage(s.canvas, left, top + wrapY, w, h);
+    if (wrapX && wrapY) ctx.drawImage(s.canvas, left + wrapX, top + wrapY, w, h);
   }
 
   private sprite(t: Term): Sprite {
