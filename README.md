@@ -1,5 +1,7 @@
 # AlgoChem: a lambda soup
 
+<!-- help:start (this part is also shown in the app's help overlay) -->
+
 An algorithmic chemistry you can watch. Hundreds of lambda-calculus expressions drift around the screen as text. When two of them bump into each other, they can react: one is applied to the other as a function, and the result is reduced to normal form. Over time the soup loses variety and settles into groups of expressions that keep producing each other.
 
 It's based on Walter Fontana and Leo Buss's *AlChemy*.
@@ -54,6 +56,7 @@ The gauge in the panel shows the free mass and the total. With conservation on, 
 | `R` | Reset (same seed gives the same starting soup) |
 | `L` | Species list |
 | `H` | Hide the panel |
+| `?` | This help |
 
 The panel also has the simulation speed (0.25× to 8×), the starting number of molecules (applied on reset) and the seed.
 
@@ -74,6 +77,8 @@ The page keeps its settings in the URL, so a link reproduces a setup:
 | `perf` | Log timing and soup statistics to the console |
 
 Example: `?seed=demo&mode=consumptive&refill=mass&conserve=1`
+
+<!-- help:end -->
 
 ## Running it
 

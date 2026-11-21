@@ -19,6 +19,7 @@ export interface ControlState {
 export interface ControlHandlers {
   onReset(): void;
   onToggleSpecies(): void;
+  onToggleHelp(): void;
   /** Mode, inflow or conservation changed (applies live). */
   onModeChange(): void;
 }
@@ -40,6 +41,7 @@ export class Controls {
       <div class="row">
         <button data-k="pause" title="Space">Pause</button>
         <button data-k="reset" title="R">Reset</button>
+        <button data-k="help" class="help-btn" title="Help (?)">?</button>
       </div>
       <button data-k="species" title="L">Species list</button>
       <div class="field">
@@ -79,7 +81,7 @@ export class Controls {
         </span>
       </label>
       <div class="alive"><span data-k="alive">0</span> molecules now</div>
-      <div class="hint">drag to stir · space pause · R reset · L species · H hide</div>
+      <div class="hint">drag to stir · space pause · R reset · L species · H hide · ? help</div>
     `;
     parent.appendChild(this.root);
 
@@ -172,6 +174,7 @@ export class Controls {
     this.pauseBtn.addEventListener("click", () => this.togglePause());
     q("reset").addEventListener("click", () => this.reset());
     q("species").addEventListener("click", () => this.handlers.onToggleSpecies());
+    q("help").addEventListener("click", () => this.handlers.onToggleHelp());
     q("dice").addEventListener("click", () => {
       this.seedInput.value = randomSeed();
       this.reset();
@@ -191,6 +194,8 @@ export class Controls {
         this.reset();
       } else if (e.key === "l" || e.key === "L") {
         this.handlers.onToggleSpecies();
+      } else if (e.key === "?") {
+        this.handlers.onToggleHelp();
       } else if (e.key === "h" || e.key === "H") {
         this.root.classList.toggle("hidden");
       }

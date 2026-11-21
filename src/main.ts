@@ -5,6 +5,7 @@ import { World, type ReactionEvent, type Particle } from "./physics/world";
 import { Renderer } from "./render/renderer";
 import { Controls, randomSeed } from "./ui/controls";
 import { SpeciesDrawer } from "./ui/species";
+import { HelpOverlay } from "./ui/help";
 import { print } from "./lambda/print";
 
 const DT = 1 / 60; // fixed simulation step (s)
@@ -38,11 +39,17 @@ const controls = new Controls(
     refillBy: params.get("refill") === "mass" ? "mass" : "count",
     conserve: params.get("conserve") === "1",
   },
-  { onReset: reset, onToggleSpecies: () => drawer.toggle(), onModeChange: applyMode },
+  {
+    onReset: reset,
+    onToggleSpecies: () => drawer.toggle(),
+    onToggleHelp: () => help.toggle(),
+    onModeChange: applyMode,
+  },
 );
 
 let world: World;
 const drawer = new SpeciesDrawer(document.body, () => world);
+const help = new HelpOverlay(document.body);
 let zoom = 1;
 
 function reset(): void {
